@@ -34,7 +34,7 @@ If you attach separate monitors, the script renders the same dashboard to every 
 
 The script uses larger monitor text when the attached display has enough room, and falls back to compact text on small monitors. Bar labels include current/total values beside the percentage so the main status is readable from farther away.
 
-Only true capacity sections use bars. The top stored items list uses plain names and counts so it does not look like another capacity meter.
+Only true capacity sections use bars. The top stored items list uses plain names and counts so it does not look like another capacity meter. Items without a real stored amount are ignored; stack/pattern `size` is not counted as inventory.
 
 ## Depletion Warnings
 

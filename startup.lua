@@ -25,8 +25,8 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-06-29.10"
-local STATE_VERSION = 3
+local VERSION = "2026-06-29.11"
+local STATE_VERSION = 4
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local STATE_FILE = ".ae2_usage_state"
 local SAMPLE_SECONDS = 90
@@ -86,7 +86,7 @@ local function pct(used, total)
 end
 
 local function amountOf(item)
-  return n(item.amount or item.count or item.qty or item.size)
+  return n(item.amount or item.count or item.qty)
 end
 
 local function itemKey(item)
@@ -296,73 +296,75 @@ local function updateUsage(items)
   for _, item in pairs(items or {}) do
     local key = itemKey(item)
     local amount = amountOf(item)
-    current[key] = amount
-    local prior = usageState.last[key]
-    local label = itemLabel(item)
-    local watchable = shouldWatchItem(key, label)
-    if prior and not usageState.ignored[key] and watchable then
-      local tracked = usageState.tracked[key] or {name = label, consumed = 0, lastDrop = 0, left = amount, samples = 0, dropEvents = 0}
-      tracked.name = label
-      tracked.samples = n(tracked.samples) + 1
-      tracked.left = amount
-      tracked.lastSeen = now
+    if amount > 0 then
+      current[key] = amount
+      local prior = usageState.last[key]
+      local label = itemLabel(item)
+      local watchable = shouldWatchItem(key, label)
+      if prior and not usageState.ignored[key] and watchable then
+        local tracked = usageState.tracked[key] or {name = label, consumed = 0, lastDrop = 0, left = amount, samples = 0, dropEvents = 0}
+        tracked.name = label
+        tracked.samples = n(tracked.samples) + 1
+        tracked.left = amount
+        tracked.lastSeen = now
 
-      if amount < prior then
-        local drop = prior - amount
-        if drop >= RECENT_DROP then
-          local candidate = usageState.recentCandidates[key] or {name = label, firstSeen = now, totalDrop = 0, dropEvents = 0}
-          if now - n(candidate.firstSeen) > RECENT_CONFIRM_SECONDS then
-            candidate = {name = label, firstSeen = now, totalDrop = 0, dropEvents = 0}
+        if amount < prior then
+          local drop = prior - amount
+          if drop >= RECENT_DROP then
+            local candidate = usageState.recentCandidates[key] or {name = label, firstSeen = now, totalDrop = 0, dropEvents = 0}
+            if now - n(candidate.firstSeen) > RECENT_CONFIRM_SECONDS then
+              candidate = {name = label, firstSeen = now, totalDrop = 0, dropEvents = 0}
+            end
+            candidate.name = label
+            candidate.totalDrop = n(candidate.totalDrop) + drop
+            candidate.dropEvents = n(candidate.dropEvents) + 1
+            candidate.lastDrop = drop
+            candidate.left = amount
+            candidate.lastSeen = now
+            usageState.recentCandidates[key] = candidate
+            if n(candidate.dropEvents) >= RECENT_EVENTS_REQUIRED then
+              recent[#recent + 1] = {
+                key = key,
+                name = label,
+                drop = candidate.totalDrop,
+                left = amount,
+                score = candidate.totalDrop
+              }
+            end
           end
-          candidate.name = label
-          candidate.totalDrop = n(candidate.totalDrop) + drop
-          candidate.dropEvents = n(candidate.dropEvents) + 1
-          candidate.lastDrop = drop
-          candidate.left = amount
-          candidate.lastSeen = now
-          usageState.recentCandidates[key] = candidate
-          if n(candidate.dropEvents) >= RECENT_EVENTS_REQUIRED then
-            recent[#recent + 1] = {
-              key = key,
-              name = label,
-              drop = candidate.totalDrop,
-              left = amount,
-              score = candidate.totalDrop
-            }
+          if drop >= MIN_REAL_DROP then
+            tracked.consumed = n(tracked.consumed) + drop
+            tracked.dropEvents = n(tracked.dropEvents) + 1
+            tracked.lastDrop = drop
+          else
+            tracked.lastDrop = 0
           end
-        end
-        if drop >= MIN_REAL_DROP then
-          tracked.consumed = n(tracked.consumed) + drop
-          tracked.dropEvents = n(tracked.dropEvents) + 1
-          tracked.lastDrop = drop
+        elseif amount > prior then
+          usageState.recentCandidates[key] = nil
+          tracked.lastDrop = 0
+          tracked.dropEvents = math.max(0, n(tracked.dropEvents) - 1)
+          tracked.consumed = math.floor(n(tracked.consumed) * 0.5)
         else
           tracked.lastDrop = 0
         end
-      elseif amount > prior then
-        usageState.recentCandidates[key] = nil
-        tracked.lastDrop = 0
-        tracked.dropEvents = math.max(0, n(tracked.dropEvents) - 1)
-        tracked.consumed = math.floor(n(tracked.consumed) * 0.5)
-      else
-        tracked.lastDrop = 0
-      end
 
-      usageState.tracked[key] = tracked
+        usageState.tracked[key] = tracked
 
-      local bigDrop = n(tracked.lastDrop) >= math.max(FAST_DROP, amount * 0.10)
-      local learned = n(tracked.samples) >= WARMUP_SAMPLES
-      local repeatedDrops = n(tracked.dropEvents) >= DROP_EVENTS_REQUIRED
-      local heavyUse = n(tracked.consumed) >= CONSUMED_WATCH
-      local lowStock = amount <= LOW_STOCK
-      if learned and repeatedDrops and heavyUse and (lowStock or bigDrop) then
-        warnings[#warnings + 1] = {
-          key = key,
-          name = label,
-          drop = n(tracked.lastDrop),
-          left = amount,
-          consumed = tracked.consumed,
-          score = (lowStock and 100000000 or 0) + n(tracked.lastDrop) + tracked.consumed
-        }
+        local bigDrop = n(tracked.lastDrop) >= math.max(FAST_DROP, amount * 0.10)
+        local learned = n(tracked.samples) >= WARMUP_SAMPLES
+        local repeatedDrops = n(tracked.dropEvents) >= DROP_EVENTS_REQUIRED
+        local heavyUse = n(tracked.consumed) >= CONSUMED_WATCH
+        local lowStock = amount <= LOW_STOCK
+        if learned and repeatedDrops and heavyUse and (lowStock or bigDrop) then
+          warnings[#warnings + 1] = {
+            key = key,
+            name = label,
+            drop = n(tracked.lastDrop),
+            left = amount,
+            consumed = tracked.consumed,
+            score = (lowStock and 100000000 or 0) + n(tracked.lastDrop) + tracked.consumed
+          }
+        end
       end
     end
   end
@@ -400,10 +402,15 @@ while true do
   local itemTypes, itemCount = 0, 0
   local top = {}
   for _, item in pairs(items) do
-    itemTypes = itemTypes + 1
     local a = amountOf(item)
-    itemCount = itemCount + a
-    top[#top + 1] = {name = itemLabel(item), amount = a}
+    if a > 0 then
+      itemTypes = itemTypes + 1
+      itemCount = itemCount + a
+      local label = itemLabel(item)
+      if shouldWatchItem(itemKey(item), label) then
+        top[#top + 1] = {name = label, amount = a}
+      end
+    end
   end
   table.sort(top, function(a, b) return a.amount > b.amount end)
   local warnings, recent = updateUsage(items)
