@@ -30,6 +30,10 @@ If you build one connected monitor wall, CC:Tweaked exposes it as one big monito
 
 If you attach separate monitors, the script renders the same dashboard to every monitor peripheral it can find. `UPD` and `IGN` touch buttons work on the monitor you tap.
 
+## Distance Readability
+
+The script uses larger monitor text when the attached display has enough room, and falls back to compact text on small monitors. Bar labels include current/total values beside the percentage so the main status is readable from farther away.
+
 ## Depletion Warnings
 
 The monitor stores usage state in `.ae2_usage_state`. It now waits for repeated confirmed drops before warning, because AE snapshots can be noisy while the system is crafting, importing, or moving items.

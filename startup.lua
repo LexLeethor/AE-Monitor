@@ -10,7 +10,11 @@ for _, name in ipairs(peripheral.getNames()) do
   if peripheral.getType(name) == "monitor" then
     local device = peripheral.wrap(name)
     if device then
-      if device.setTextScale then device.setTextScale(0.5) end
+      if device.setTextScale then
+        device.setTextScale(1)
+        local mw, mh = device.getSize()
+        if mw < 42 or mh < 18 then device.setTextScale(0.5) end
+      end
       monitorTargets[#monitorTargets + 1] = {name = name, device = device}
     end
   end
@@ -21,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-06-29.7"
+local VERSION = "2026-06-29.8"
 local STATE_VERSION = 2
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local STATE_FILE = ".ae2_usage_state"
@@ -132,11 +136,17 @@ end
 
 local function bar(x, y, w, label, used, total, color)
   local p = pct(used, total)
-  local fill = math.floor((p / 100) * w + 0.5)
-  writeAt(x, y, string.sub(label, 1, 8), colors.lightGray, colors.black, 8)
-  fillRect(x + 9, y, w, 1, colors.gray)
-  fillRect(x + 9, y, fill, 1, color)
-  writeAt(x + 10 + w, y, string.format("%3d%%", math.floor(p + 0.5)), colors.white, colors.black, 4)
+  local sw = mon.getSize()
+  local labelW = math.min(20, math.max(10, math.floor(sw * 0.34)))
+  local barX = x + labelW + 1
+  local pctW = 4
+  local actualW = math.max(6, sw - barX - pctW)
+  local fill = math.floor((p / 100) * actualW + 0.5)
+  local totalText = total > 0 and fmt(total) or "?"
+  writeAt(x, y, label .. " " .. fmt(used) .. "/" .. totalText, colors.white, colors.black, labelW)
+  fillRect(barX, y, actualW, 1, colors.gray)
+  fillRect(barX, y, fill, 1, color)
+  writeAt(sw - 3, y, string.format("%3d%%", math.floor(p + 0.5)), colors.white, colors.black, 4)
 end
 
 local function typeSlots(cells)
