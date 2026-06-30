@@ -34,6 +34,8 @@ If you attach separate monitors, the script renders the same dashboard to every 
 
 The script uses larger monitor text when the attached display has enough room, and falls back to compact text on small monitors. Bar labels include current/total values beside the percentage so the main status is readable from farther away.
 
+Only true capacity sections use bars. The top stored items list uses plain names and counts so it does not look like another capacity meter.
+
 ## Depletion Warnings
 
 The monitor stores usage state in `.ae2_usage_state`. It now waits for repeated confirmed drops before warning, because AE snapshots can be noisy while the system is crafting, importing, or moving items.

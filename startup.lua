@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-06-29.8"
+local VERSION = "2026-06-29.9"
 local STATE_VERSION = 2
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local STATE_FILE = ".ae2_usage_state"
@@ -471,21 +471,18 @@ while true do
   writeAt(2, nextY, "TOP STORED ITEMS", colors.black, colors.lightGray)
   nextY = nextY + 1
 
-  local maxAmt = top[1] and top[1].amount or 1
   local y = nextY
   local listRows = math.max(0, h - y + 1)
   for i = 1, math.min(#top, listRows) do
-    local rowColor = colors.lime
-    if i > 3 then rowColor = colors.green end
-    if i > 8 then rowColor = colors.gray end
     local amount = top[i].amount
-    local nameW = math.max(12, math.floor(w * 0.42))
-    local miniW = math.max(8, w - nameW - 12)
+    local amountText = fmt(amount)
+    local amountW = math.max(8, #amountText)
+    local nameW = math.max(8, w - amountW - 2)
+    local nameColor = colors.white
+    if i > 8 then nameColor = colors.lightGray end
     clearLine(y, colors.black)
-    writeAt(1, y, string.sub(top[i].name, 1, nameW), colors.white, colors.black, nameW)
-    fillRect(nameW + 2, y, miniW, 1, colors.gray)
-    fillRect(nameW + 2, y, math.max(1, math.floor((amount / maxAmt) * miniW + 0.5)), 1, rowColor)
-    writeAt(w - 7, y, fmt(amount), colors.white, colors.black, 8)
+    writeAt(1, y, string.sub(top[i].name, 1, nameW), nameColor, colors.black, nameW)
+    writeAt(w - amountW + 1, y, amountText, colors.white, colors.black, amountW)
     y = y + 1
   end
   end
