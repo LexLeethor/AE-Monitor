@@ -21,13 +21,14 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-06-29.6"
+local VERSION = "2026-06-29.7"
 local STATE_VERSION = 2
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local STATE_FILE = ".ae2_usage_state"
 local SAMPLE_SECONDS = 90
 local WARMUP_SAMPLES = 3
 local MIN_REAL_DROP = 512
+local RECENT_DROP = 64
 local CONSUMED_WATCH = 2048
 local DROP_EVENTS_REQUIRED = 2
 local LOW_STOCK = 4096
@@ -171,6 +172,7 @@ local function loadState()
     data.last = data.last or {}
     data.tracked = data.tracked or {}
     data.warnings = data.warnings or {}
+    data.recent = data.recent or {}
     data.ignored = data.ignored or {}
     data.lastSample = data.lastSample or 0
     return data
@@ -263,11 +265,12 @@ local function updateUsage(items)
   local now = os.epoch and math.floor(os.epoch("utc") / 1000) or os.time()
   if usageState.lastSample and now - usageState.lastSample < SAMPLE_SECONDS then
     usageState.warnings = filteredWarnings(usageState.warnings)
-    return usageState.warnings or {}
+    return usageState.warnings or {}, usageState.recent or {}
   end
 
   local current = {}
   local warnings = {}
+  local recent = {}
   for _, item in pairs(items or {}) do
     local key = itemKey(item)
     local amount = amountOf(item)
@@ -283,6 +286,15 @@ local function updateUsage(items)
 
       if amount < prior then
         local drop = prior - amount
+        if drop >= RECENT_DROP then
+          recent[#recent + 1] = {
+            key = key,
+            name = label,
+            drop = drop,
+            left = amount,
+            score = drop
+          }
+        end
         if drop >= MIN_REAL_DROP then
           tracked.consumed = n(tracked.consumed) + drop
           tracked.dropEvents = n(tracked.dropEvents) + 1
@@ -325,12 +337,14 @@ local function updateUsage(items)
   end
 
   table.sort(warnings, function(a, b) return a.score > b.score end)
+  table.sort(recent, function(a, b) return a.score > b.score end)
   usageState.stateVersion = STATE_VERSION
   usageState.last = current
   usageState.lastSample = now
   usageState.warnings = warnings
+  usageState.recent = recent
   saveState(usageState)
-  return warnings
+  return warnings, recent
 end
 
 while true do
@@ -350,7 +364,7 @@ while true do
     top[#top + 1] = {name = itemLabel(item), amount = a}
   end
   table.sort(top, function(a, b) return a.amount > b.amount end)
-  local warnings = updateUsage(items)
+  local warnings, recent = updateUsage(items)
 
   local fluidTypes, fluidAmount = 0, 0
   for _, fluid in pairs(fluids) do
@@ -401,9 +415,13 @@ while true do
     writeAt(2, 15, "v" .. VERSION .. "  CELLS " .. countTable(cells) .. "  DRIVES " .. countTable(drives) .. "  CPUs " .. countTable(cpus) .. "  JOBS " .. countTable(tasks) .. "  FLUID CELLS " .. fluidCellCount, colors.black, colors.gray)
   end
 
-  clearLine(17, #warnings > 0 and colors.red or colors.gray)
+  local watchColor = colors.gray
+  if #warnings > 0 then watchColor = colors.red elseif #recent > 0 then watchColor = colors.orange end
+  clearLine(17, watchColor)
   if #warnings > 0 then
     writeAt(2, 17, "CONFIRMED DEPLETION WARNINGS", colors.white, colors.red)
+  elseif #recent > 0 then
+    writeAt(2, 17, "RECENT USE - not a warning", colors.black, colors.orange)
   else
     writeAt(2, 17, "DEPLETION WATCH: waits for repeated drops", colors.black, colors.gray)
   end
@@ -420,6 +438,15 @@ while true do
       fillRect(buttonX, nextY, 6, 1, colors.gray)
       writeAt(buttonX + 1, nextY, "IGN", colors.white, colors.gray, 3)
       warningButtons[screen][#warningButtons[screen] + 1] = {x = buttonX, x2 = w, y = nextY, key = warnings[i].key, name = warnings[i].name}
+      nextY = nextY + 1
+    end
+  elseif #recent > 0 then
+    warningButtons[screen] = {}
+    for i = 1, math.min(#recent, 3) do
+      clearLine(nextY, colors.black)
+      local nameW = math.max(8, w - 22)
+      writeAt(1, nextY, string.sub(recent[i].name, 1, nameW), colors.orange, colors.black, nameW)
+      writeAt(math.max(1, w - 19), nextY, "-" .. fmt(recent[i].drop) .. " left " .. fmt(recent[i].left), colors.yellow, colors.black, 19)
       nextY = nextY + 1
     end
   else

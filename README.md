@@ -34,6 +34,8 @@ If you attach separate monitors, the script renders the same dashboard to every 
 
 The monitor stores usage state in `.ae2_usage_state`. It now waits for repeated confirmed drops before warning, because AE snapshots can be noisy while the system is crafting, importing, or moving items.
 
+`RECENT USE` is a softer, faster panel. It can show after one sampled drop, but it is not treated as a depletion warning.
+
 Tap `IGN` beside a warning to ignore that item. To clear all learned history and ignored items:
 
 ```lua
