@@ -25,8 +25,8 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-06-29.11"
-local STATE_VERSION = 4
+local VERSION = "2026-06-29.12"
+local STATE_VERSION = 5
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local STATE_FILE = ".ae2_usage_state"
 local SAMPLE_SECONDS = 90
@@ -93,8 +93,31 @@ local function itemKey(item)
   return tostring(item.name or item.id or item.displayName or "unknown")
 end
 
+local function titleCase(text)
+  return string.gsub(text, "(%a)([%w']*)", function(first, rest)
+    return string.upper(first) .. string.lower(rest)
+  end)
+end
+
+local function cleanLabel(text)
+  text = tostring(text or "unknown")
+  text = string.gsub(text, "^item%.", "")
+  text = string.gsub(text, "^block%.", "")
+  text = string.gsub(text, "^fluid%.", "")
+  if string.find(text, ":", 1, true) and not string.find(text, " ", 1, true) then
+    text = string.match(text, ":(.+)$") or text
+  end
+  text = string.gsub(text, "[_%.]+", " ")
+  text = string.gsub(text, "%s+", " ")
+  text = string.gsub(text, "^%s+", "")
+  text = string.gsub(text, "%s+$", "")
+  if text == "" then text = "unknown" end
+  if not string.find(text, "%u") then text = titleCase(text) end
+  return text
+end
+
 local function itemLabel(item)
-  return tostring(item.displayName or item.name or item.id or "unknown")
+  return cleanLabel(item.displayName or item.name or item.id or "unknown")
 end
 
 local function shouldWatchItem(key, label)
@@ -102,7 +125,31 @@ local function shouldWatchItem(key, label)
   if string.find(text, "spatial", 1, true) then return false end
   if string.find(text, "storage cell", 1, true) then return false end
   if string.find(text, "cell component", 1, true) then return false end
+  if string.find(text, "crafting storage", 1, true) then return false end
+  if string.find(text, "encoded pattern", 1, true) then return false end
+  if string.find(text, "blank pattern", 1, true) then return false end
+  if string.find(text, "pattern provider", 1, true) then return false end
+  if string.find(text, "annihilation plane", 1, true) then return false end
+  if string.find(text, "formation plane", 1, true) then return false end
+  if string.find(text, "upgrade card", 1, true) then return false end
   return true
+end
+
+local function isUsefulLowStock(key, label, amount)
+  if amount <= 0 or amount > 2048 then return false end
+  local text = string.lower(tostring(label or "") .. " " .. tostring(key or ""))
+  if not shouldWatchItem(key, label) then return false end
+  local needles = {
+    "ingot", "dust", "nugget", "gem", "crystal", "essence", "alloy",
+    "redstone", "lapis", "quartz", "certus", "fluix", "diamond",
+    "emerald", "iron", "gold", "copper", "tin", "lead", "silver",
+    "nickel", "uranium", "coal", "glass", "silicon", "processor",
+    "circuit", "plate", "gear", "rod"
+  }
+  for _, needle in ipairs(needles) do
+    if string.find(text, needle, 1, true) then return true end
+  end
+  return false
 end
 
 local function set(fg, bg)
@@ -401,18 +448,24 @@ while true do
 
   local itemTypes, itemCount = 0, 0
   local top = {}
+  local lowStock = {}
   for _, item in pairs(items) do
     local a = amountOf(item)
     if a > 0 then
       itemTypes = itemTypes + 1
       itemCount = itemCount + a
       local label = itemLabel(item)
-      if shouldWatchItem(itemKey(item), label) then
+      local key = itemKey(item)
+      if shouldWatchItem(key, label) then
         top[#top + 1] = {name = label, amount = a}
+      end
+      if isUsefulLowStock(key, label, a) then
+        lowStock[#lowStock + 1] = {name = label, amount = a}
       end
     end
   end
   table.sort(top, function(a, b) return a.amount > b.amount end)
+  table.sort(lowStock, function(a, b) return a.amount < b.amount end)
   local warnings, recent = updateUsage(items)
 
   local fluidTypes, fluidAmount = 0, 0
@@ -430,6 +483,34 @@ while true do
   local usage = call("getEnergyUsage", 0)
   local input = call("getAverageEnergyInput", 0)
   local itemTypeTotal, fluidTypeTotal, itemCellCount, fluidCellCount = typeSlots(cells)
+  local itemPct = pct(itemUsed, itemTotal)
+  local typePct = pct(itemTypes, itemTypeTotal)
+  local fluidPct = pct(fluidUsed, fluidTotal)
+  local fluidTypePct = pct(fluidTypes, fluidTypeTotal)
+  local powerPct = pct(energy, energyCap)
+  local jobs = countTable(tasks)
+  local health = "OK"
+  local healthColor = colors.green
+  local healthDetail = "storage stable"
+  if itemPct >= 90 then
+    health, healthColor, healthDetail = "ITEMS FULL", colors.red, "add item storage"
+  elseif typePct >= 85 then
+    health, healthColor, healthDetail = "TYPES FULL", colors.red, "add type capacity"
+  elseif powerPct > 0 and powerPct < 20 then
+    health, healthColor, healthDetail = "LOW POWER", colors.red, "check energy input"
+  elseif input > 0 and usage > input * 1.10 then
+    health, healthColor, healthDetail = "POWER DRAIN", colors.orange, fmt(usage) .. "/t use > " .. fmt(input) .. "/t in"
+  elseif fluidPct >= 90 then
+    health, healthColor, healthDetail = "FLUIDS FULL", colors.orange, "add fluid storage"
+  elseif fluidTypePct >= 85 then
+    health, healthColor, healthDetail = "FLUID TYPES", colors.orange, "add fluid type capacity"
+  elseif #warnings > 0 then
+    health, healthColor, healthDetail = "MATERIAL DROP", colors.red, warnings[1].name
+  elseif #recent > 0 then
+    health, healthColor, healthDetail = "MATERIAL MOVING", colors.orange, recent[1].name
+  elseif jobs > 0 then
+    health, healthColor, healthDetail = "CRAFTING", colors.cyan, tostring(jobs) .. " job(s)"
+  end
 
   for _, target in ipairs(monitorTargets) do
     mon = target.device
@@ -456,23 +537,27 @@ while true do
   bar(1, 11, barW, "FTypes", fluidTypes, fluidTypeTotal, colors.cyan)
   bar(1, 13, barW, "Power", energy, energyCap, colors.orange)
 
-  clearLine(15, colors.gray)
+  clearLine(15, healthColor)
+  writeAt(2, 15, health, colors.black, healthColor, 14)
+  writeAt(17, 15, healthDetail, colors.black, healthColor, w - 18)
+
+  clearLine(16, colors.gray)
   local now = os.epoch and math.floor(os.epoch("utc") / 1000) or os.time()
   if statusMessage and now < statusUntil then
-    writeAt(2, 15, statusMessage, colors.black, colors.gray, w - 2)
+    writeAt(2, 16, statusMessage, colors.black, colors.gray, w - 2)
   else
-    writeAt(2, 15, "v" .. VERSION .. "  CELLS " .. countTable(cells) .. "  DRIVES " .. countTable(drives) .. "  CPUs " .. countTable(cpus) .. "  JOBS " .. countTable(tasks) .. "  FLUID CELLS " .. fluidCellCount, colors.black, colors.gray)
+    writeAt(2, 16, "v" .. VERSION .. "  CELLS " .. countTable(cells) .. "  DRIVES " .. countTable(drives) .. "  CPUs " .. countTable(cpus) .. "  JOBS " .. jobs .. "  FLUID CELLS " .. fluidCellCount, colors.black, colors.gray)
   end
 
   local watchColor = colors.gray
   if #warnings > 0 then watchColor = colors.red elseif #recent > 0 then watchColor = colors.orange end
   clearLine(17, watchColor)
   if #warnings > 0 then
-    writeAt(2, 17, "CONFIRMED DEPLETION WARNINGS", colors.white, colors.red)
+    writeAt(2, 17, "CONFIRMED MATERIAL DROPS", colors.white, colors.red)
   elseif #recent > 0 then
-    writeAt(2, 17, "RECENT USE - not a warning", colors.black, colors.orange)
+    writeAt(2, 17, "MATERIALS MOVING - confirmed samples", colors.black, colors.orange)
   else
-    writeAt(2, 17, "DEPLETION WATCH: waits for repeated drops", colors.black, colors.gray)
+    writeAt(2, 17, "WATCH: repeated real count drops only", colors.black, colors.gray)
   end
 
   local nextY = 18
@@ -500,29 +585,49 @@ while true do
     end
   else
     warningButtons[screen] = {}
-    clearLine(nextY, colors.black)
-    writeAt(1, nextY, "Warns after real count drops; resets if you delete " .. STATE_FILE, colors.lightGray, colors.black, w)
-    nextY = nextY + 1
   end
 
-  nextY = nextY + 1
   clearLine(nextY, colors.lightGray)
-  writeAt(2, nextY, "TOP STORED ITEMS", colors.black, colors.lightGray)
+  writeAt(2, nextY, "LOW USEFUL STOCK", colors.black, colors.lightGray)
   nextY = nextY + 1
 
-  local y = nextY
-  local listRows = math.max(0, h - y + 1)
-  for i = 1, math.min(#top, listRows) do
-    local amount = top[i].amount
-    local amountText = fmt(amount)
-    local amountW = math.max(8, #amountText)
-    local nameW = math.max(8, w - amountW - 2)
-    local nameColor = colors.white
-    if i > 8 then nameColor = colors.lightGray end
-    clearLine(y, colors.black)
-    writeAt(1, y, string.sub(top[i].name, 1, nameW), nameColor, colors.black, nameW)
-    writeAt(w - amountW + 1, y, amountText, colors.white, colors.black, amountW)
-    y = y + 1
+  if #lowStock == 0 then
+    clearLine(nextY, colors.black)
+    writeAt(1, nextY, "No common materials under 2k", colors.lightGray, colors.black, w)
+    nextY = nextY + 1
+  else
+    local lowRows = h < 25 and 3 or 4
+    for i = 1, math.min(#lowStock, lowRows) do
+      local amountText = fmt(lowStock[i].amount)
+      local amountW = math.max(8, #amountText)
+      local nameW = math.max(8, w - amountW - 2)
+      clearLine(nextY, colors.black)
+      writeAt(1, nextY, string.sub(lowStock[i].name, 1, nameW), colors.yellow, colors.black, nameW)
+      writeAt(w - amountW + 1, nextY, amountText, colors.white, colors.black, amountW)
+      nextY = nextY + 1
+    end
+  end
+
+  if nextY + 2 <= h then
+    nextY = nextY + 1
+    clearLine(nextY, colors.lightGray)
+    writeAt(2, nextY, "BIGGEST STORED ITEMS", colors.black, colors.lightGray)
+    nextY = nextY + 1
+
+    local y = nextY
+    local listRows = math.max(0, h - y + 1)
+    for i = 1, math.min(#top, listRows) do
+      local amount = top[i].amount
+      local amountText = fmt(amount)
+      local amountW = math.max(8, #amountText)
+      local nameW = math.max(8, w - amountW - 2)
+      local nameColor = colors.white
+      if i > 8 then nameColor = colors.lightGray end
+      clearLine(y, colors.black)
+      writeAt(1, y, string.sub(top[i].name, 1, nameW), nameColor, colors.black, nameW)
+      writeAt(w - amountW + 1, y, amountText, colors.white, colors.black, amountW)
+      y = y + 1
+    end
   end
   end
 
