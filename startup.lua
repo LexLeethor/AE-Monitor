@@ -25,14 +25,16 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-06-29.9"
-local STATE_VERSION = 2
+local VERSION = "2026-06-29.10"
+local STATE_VERSION = 3
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local STATE_FILE = ".ae2_usage_state"
 local SAMPLE_SECONDS = 90
 local WARMUP_SAMPLES = 3
 local MIN_REAL_DROP = 512
 local RECENT_DROP = 64
+local RECENT_EVENTS_REQUIRED = 2
+local RECENT_CONFIRM_SECONDS = 1800
 local CONSUMED_WATCH = 2048
 local DROP_EVENTS_REQUIRED = 2
 local LOW_STOCK = 4096
@@ -93,6 +95,14 @@ end
 
 local function itemLabel(item)
   return tostring(item.displayName or item.name or item.id or "unknown")
+end
+
+local function shouldWatchItem(key, label)
+  local text = string.lower(tostring(label or "") .. " " .. tostring(key or ""))
+  if string.find(text, "spatial", 1, true) then return false end
+  if string.find(text, "storage cell", 1, true) then return false end
+  if string.find(text, "cell component", 1, true) then return false end
+  return true
 end
 
 local function set(fg, bg)
@@ -183,6 +193,7 @@ local function loadState()
     data.tracked = data.tracked or {}
     data.warnings = data.warnings or {}
     data.recent = data.recent or {}
+    data.recentCandidates = data.recentCandidates or {}
     data.ignored = data.ignored or {}
     data.lastSample = data.lastSample or 0
     return data
@@ -281,13 +292,15 @@ local function updateUsage(items)
   local current = {}
   local warnings = {}
   local recent = {}
+  usageState.recentCandidates = usageState.recentCandidates or {}
   for _, item in pairs(items or {}) do
     local key = itemKey(item)
     local amount = amountOf(item)
     current[key] = amount
     local prior = usageState.last[key]
     local label = itemLabel(item)
-    if prior and not usageState.ignored[key] then
+    local watchable = shouldWatchItem(key, label)
+    if prior and not usageState.ignored[key] and watchable then
       local tracked = usageState.tracked[key] or {name = label, consumed = 0, lastDrop = 0, left = amount, samples = 0, dropEvents = 0}
       tracked.name = label
       tracked.samples = n(tracked.samples) + 1
@@ -297,13 +310,26 @@ local function updateUsage(items)
       if amount < prior then
         local drop = prior - amount
         if drop >= RECENT_DROP then
-          recent[#recent + 1] = {
-            key = key,
-            name = label,
-            drop = drop,
-            left = amount,
-            score = drop
-          }
+          local candidate = usageState.recentCandidates[key] or {name = label, firstSeen = now, totalDrop = 0, dropEvents = 0}
+          if now - n(candidate.firstSeen) > RECENT_CONFIRM_SECONDS then
+            candidate = {name = label, firstSeen = now, totalDrop = 0, dropEvents = 0}
+          end
+          candidate.name = label
+          candidate.totalDrop = n(candidate.totalDrop) + drop
+          candidate.dropEvents = n(candidate.dropEvents) + 1
+          candidate.lastDrop = drop
+          candidate.left = amount
+          candidate.lastSeen = now
+          usageState.recentCandidates[key] = candidate
+          if n(candidate.dropEvents) >= RECENT_EVENTS_REQUIRED then
+            recent[#recent + 1] = {
+              key = key,
+              name = label,
+              drop = candidate.totalDrop,
+              left = amount,
+              score = candidate.totalDrop
+            }
+          end
         end
         if drop >= MIN_REAL_DROP then
           tracked.consumed = n(tracked.consumed) + drop
@@ -313,6 +339,7 @@ local function updateUsage(items)
           tracked.lastDrop = 0
         end
       elseif amount > prior then
+        usageState.recentCandidates[key] = nil
         tracked.lastDrop = 0
         tracked.dropEvents = math.max(0, n(tracked.dropEvents) - 1)
         tracked.consumed = math.floor(n(tracked.consumed) * 0.5)
@@ -343,6 +370,11 @@ local function updateUsage(items)
   for key, tracked in pairs(usageState.tracked or {}) do
     if tracked.lastSeen and now - tracked.lastSeen > 86400 then
       usageState.tracked[key] = nil
+    end
+  end
+  for key, candidate in pairs(usageState.recentCandidates or {}) do
+    if candidate.lastSeen and now - candidate.lastSeen > RECENT_CONFIRM_SECONDS then
+      usageState.recentCandidates[key] = nil
     end
   end
 

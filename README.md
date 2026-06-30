@@ -40,7 +40,7 @@ Only true capacity sections use bars. The top stored items list uses plain names
 
 The monitor stores usage state in `.ae2_usage_state`. It now waits for repeated confirmed drops before warning, because AE snapshots can be noisy while the system is crafting, importing, or moving items.
 
-`RECENT USE` is a softer, faster panel. It can show after one sampled drop, but it is not treated as a depletion warning.
+`RECENT USE` is a softer, faster panel. It still needs repeated sampled drops, but it is not treated as a depletion warning. AE storage-cell/spatial items are filtered out of watch panels because they tend to create misleading noise.
 
 Tap `IGN` beside a warning to ignore that item. To clear all learned history and ignored items:
 
