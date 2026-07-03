@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-02.4"
+local VERSION = "2026-07-02.5"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local STATE_FILE = ".ae2_usage_state"
@@ -531,6 +531,10 @@ local usageState = loadState()
 local warningButtons = {}
 local updateButtons = {}
 local bulkButtons = {}
+local sectionButtons = {}
+local pageButtons = {}
+local collapsedSections = {}
+local storedPages = {}
 local statusMessage = nil
 local statusUntil = 0
 local setStatus
@@ -569,6 +573,32 @@ local function toggleBulkAt(screen, x, y)
       else
         setStatus("Bulk marker removed: " .. button.name)
       end
+      return true
+    end
+  end
+  return false
+end
+
+local function isCollapsed(screen, section)
+  local state = collapsedSections[screen]
+  return state and state[section] == true
+end
+
+local function toggleSectionAt(screen, x, y)
+  for _, button in ipairs(sectionButtons[screen] or {}) do
+    if y == button.y and x >= button.x and x <= button.x2 then
+      collapsedSections[screen] = collapsedSections[screen] or {}
+      collapsedSections[screen][button.section] = not collapsedSections[screen][button.section]
+      return true
+    end
+  end
+  return false
+end
+
+local function pageAt(screen, x, y)
+  for _, button in ipairs(pageButtons[screen] or {}) do
+    if y == button.y and x >= button.x and x <= button.x2 then
+      storedPages[screen] = math.max(1, n(storedPages[screen]) + button.delta)
       return true
     end
   end
@@ -617,6 +647,8 @@ local function handleTouch(screen, x, y)
   if updateButton and y == updateButton.y and x >= updateButton.x and x <= updateButton.x2 then
     return runUpdater()
   end
+  if pageAt(screen, x, y) then return true end
+  if toggleSectionAt(screen, x, y) then return true end
   if toggleBulkAt(screen, x, y) then return true end
   return ignoreWarningAt(screen, x, y)
 end
@@ -818,6 +850,9 @@ while true do
     local w, h = mon.getSize()
     local barW = math.max(12, w - 15)
     local tileW = math.floor((w - 4) / 3)
+    sectionButtons[screen] = {}
+    pageButtons[screen] = {}
+    storedPages[screen] = math.max(1, n(storedPages[screen] or 1))
 
   clearLine(1, colors.cyan)
   writeAt(2, 1, "AE2 SYSTEM", colors.black, colors.cyan)
@@ -886,10 +921,17 @@ while true do
   end
 
   clearLine(nextY, colors.lightGray)
-  writeAt(2, nextY, "ATM10 WATCH STOCK", colors.black, colors.lightGray)
+  local watchCollapsed = isCollapsed(screen, "watch")
+  local watchPrefix = watchCollapsed and "[+] " or "[-] "
+  writeAt(2, nextY, watchPrefix .. "ATM10 WATCH STOCK", colors.black, colors.lightGray, w - 2)
+  sectionButtons[screen][#sectionButtons[screen] + 1] = {x = 1, x2 = w, y = nextY, section = "watch"}
   nextY = nextY + 1
 
-  if #lowStock == 0 then
+  if watchCollapsed then
+    clearLine(nextY, colors.black)
+    writeAt(1, nextY, tostring(#lowStock) .. " watched bottleneck(s) hidden", colors.lightGray, colors.black, w)
+    nextY = nextY + 1
+  elseif #lowStock == 0 then
     clearLine(nextY, colors.black)
     writeAt(1, nextY, "No watched ATM10 bottlenecks low", colors.lightGray, colors.black, w)
     nextY = nextY + 1
@@ -906,16 +948,43 @@ while true do
     end
   end
 
-  if nextY + 2 <= h then
+  if nextY < h then
     nextY = nextY + 1
+  end
+
+  if nextY <= h then
     clearLine(nextY, colors.lightGray)
+    local storedCollapsed = isCollapsed(screen, "stored")
+    local storedPrefix = storedCollapsed and "[+] " or "[-] "
+    local rowsAvailable = math.max(0, h - nextY)
+    local pageCount = math.max(1, math.ceil(#top / math.max(1, rowsAvailable)))
+    if storedPages[screen] > pageCount then storedPages[screen] = pageCount end
+    local storedPage = storedPages[screen]
     local bulkTitle = bulkCellCount > 0 and ("BIGGEST STORED ITEMS  BULK " .. bulkItemMatches .. " CELLS " .. bulkCellCount) or "BIGGEST STORED ITEMS"
-    writeAt(2, nextY, bulkTitle, colors.black, colors.lightGray, w - 2)
+    local titleW = w - 2
+    if not storedCollapsed and pageCount > 1 then titleW = math.max(8, w - 24) end
+    writeAt(2, nextY, storedPrefix .. bulkTitle, colors.black, colors.lightGray, titleW)
+    sectionButtons[screen][#sectionButtons[screen] + 1] = {x = 1, x2 = titleW + 1, y = nextY, section = "stored"}
+    if not storedCollapsed and pageCount > 1 then
+      local prevX = math.max(1, w - 20)
+      local nextX = math.max(1, w - 5)
+      writeAt(prevX, nextY, "PREV", storedPage > 1 and colors.white or colors.gray, colors.blue, 4)
+      writeAt(math.max(1, w - 14), nextY, "P" .. storedPage .. "/" .. pageCount, colors.black, colors.lightGray, 8)
+      writeAt(nextX, nextY, "NEXT", storedPage < pageCount and colors.white or colors.gray, colors.blue, 4)
+      if storedPage > 1 then pageButtons[screen][#pageButtons[screen] + 1] = {x = prevX, x2 = prevX + 3, y = nextY, delta = -1} end
+      if storedPage < pageCount then pageButtons[screen][#pageButtons[screen] + 1] = {x = nextX, x2 = nextX + 3, y = nextY, delta = 1} end
+    end
     nextY = nextY + 1
 
-    local y = nextY
-    local listRows = math.max(0, h - y + 1)
-    for i = 1, math.min(#top, listRows) do
+    if storedCollapsed then
+      clearLine(nextY, colors.black)
+      writeAt(1, nextY, tostring(#top) .. " stored item(s) hidden", colors.lightGray, colors.black, w)
+    else
+      local y = nextY
+      local listRows = math.max(0, h - y + 1)
+      local startIndex = ((storedPage - 1) * listRows) + 1
+      local endIndex = math.min(#top, startIndex + listRows - 1)
+      for i = startIndex, endIndex do
       local amount = top[i].amount
       local amountText = fmt(amount)
       local marker = top[i].bulk and "BULK" or "B+"
@@ -935,6 +1004,7 @@ while true do
       bulkButtons[screen][#bulkButtons[screen] + 1] = {x = markerX, x2 = markerX + markerW - 1, y = y, key = top[i].key, name = top[i].name}
       writeAt(w - amountW + 1, y, amountText, colors.white, rowBg, amountW)
       y = y + 1
+      end
     end
   end
   end
