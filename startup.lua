@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-02.1"
+local VERSION = "2026-07-02.2"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local STATE_FILE = ".ae2_usage_state"
@@ -168,6 +168,57 @@ local function loadBulkHints()
     end
   end
   return hints
+end
+
+local function loadBulkHintLines()
+  local lines = {}
+  if not fs.exists(BULK_HINTS_FILE) then return lines end
+  local h = fs.open(BULK_HINTS_FILE, "r")
+  if not h then return lines end
+  local raw = h.readAll() or ""
+  h.close()
+  for line in string.gmatch(raw, "[^\r\n]+") do
+    local trimmed = string.gsub(line, "^%s+", "")
+    trimmed = string.gsub(trimmed, "%s+$", "")
+    if trimmed ~= "" then lines[#lines + 1] = trimmed end
+  end
+  return lines
+end
+
+local function saveBulkHintLines(lines)
+  local h = fs.open(BULK_HINTS_FILE, "w")
+  if not h then return false end
+  for _, line in ipairs(lines or {}) do
+    h.write(line .. "\n")
+  end
+  h.close()
+  return true
+end
+
+local function toggleBulkHint(key, label)
+  key = tostring(key or "")
+  label = tostring(label or key)
+  local keyNorm = norm(key)
+  local labelNorm = norm(label)
+  local lines = loadBulkHintLines()
+  local kept = {}
+  local removed = false
+
+  for _, line in ipairs(lines) do
+    local raw = string.gsub(line, "#.*$", "")
+    raw = string.gsub(raw, "^%s+", "")
+    raw = string.gsub(raw, "%s+$", "")
+    local rawNorm = norm(raw)
+    if rawNorm ~= "" and (rawNorm == keyNorm or rawNorm == labelNorm) then
+      removed = true
+    else
+      kept[#kept + 1] = line
+    end
+  end
+
+  if not removed then kept[#kept + 1] = key ~= "" and key or label end
+  if not saveBulkHintLines(kept) then return nil end
+  return not removed
 end
 
 local function isBulkCell(cell)
@@ -479,8 +530,10 @@ end
 local usageState = loadState()
 local warningButtons = {}
 local updateButtons = {}
+local bulkButtons = {}
 local statusMessage = nil
 local statusUntil = 0
+local setStatus
 
 local function filteredWarnings(warnings)
   local filtered = {}
@@ -505,7 +558,24 @@ local function ignoreWarningAt(screen, x, y)
   return false
 end
 
-local function setStatus(message)
+local function toggleBulkAt(screen, x, y)
+  for _, button in ipairs(bulkButtons[screen] or {}) do
+    if y == button.y and x >= button.x and x <= button.x2 then
+      local marked = toggleBulkHint(button.key, button.name)
+      if marked == nil then
+        setStatus("Could not save bulk marker")
+      elseif marked then
+        setStatus("Bulk marker added: " .. button.name)
+      else
+        setStatus("Bulk marker removed: " .. button.name)
+      end
+      return true
+    end
+  end
+  return false
+end
+
+function setStatus(message)
   statusMessage = message
   local now = os.epoch and math.floor(os.epoch("utc") / 1000) or os.time()
   statusUntil = now + 8
@@ -547,6 +617,7 @@ local function handleTouch(screen, x, y)
   if updateButton and y == updateButton.y and x >= updateButton.x and x <= updateButton.x2 then
     return runUpdater()
   end
+  if toggleBulkAt(screen, x, y) then return true end
   return ignoreWarningAt(screen, x, y)
 end
 
@@ -741,6 +812,7 @@ while true do
   for _, target in ipairs(monitorTargets) do
     mon = target.device
     local screen = target.name
+    bulkButtons[screen] = {}
     mon.setBackgroundColor(colors.black)
     mon.clear()
     local w, h = mon.getSize()
@@ -846,18 +918,19 @@ while true do
     for i = 1, math.min(#top, listRows) do
       local amount = top[i].amount
       local amountText = fmt(amount)
-      local marker = top[i].bulk and "BULK" or ""
-      local markerW = marker ~= "" and 5 or 0
+      local marker = top[i].bulk and "BULK" or "B+"
+      local markerW = 5
       local amountW = math.max(8, #amountText)
       local nameW = math.max(8, w - amountW - markerW - 2)
       local nameColor = colors.white
       if i > 8 then nameColor = colors.lightGray end
       clearLine(y, colors.black)
       writeAt(1, y, string.sub(top[i].name, 1, nameW), nameColor, colors.black, nameW)
-      if marker ~= "" then
-        local markerColor = top[i].bulk == "auto" and colors.lime or colors.cyan
-        writeAt(math.max(1, w - amountW - markerW + 1), y, marker, markerColor, colors.black, markerW)
-      end
+      local markerX = math.max(1, w - amountW - markerW + 1)
+      local markerColor = colors.gray
+      if top[i].bulk == "auto" then markerColor = colors.lime elseif top[i].bulk == "hint" then markerColor = colors.cyan end
+      writeAt(markerX, y, marker, markerColor, colors.black, markerW)
+      bulkButtons[screen][#bulkButtons[screen] + 1] = {x = markerX, x2 = markerX + markerW - 1, y = y, key = top[i].key, name = top[i].name}
       writeAt(w - amountW + 1, y, amountText, colors.white, colors.black, amountW)
       y = y + 1
     end
