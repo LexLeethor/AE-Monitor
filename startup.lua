@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-02.2"
+local VERSION = "2026-07-02.3"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local STATE_FILE = ".ae2_usage_state"
@@ -924,14 +924,15 @@ while true do
       local nameW = math.max(8, w - amountW - markerW - 2)
       local nameColor = colors.white
       if i > 8 then nameColor = colors.lightGray end
+      if top[i].bulk then nameColor = colors.purple end
       clearLine(y, colors.black)
       writeAt(1, y, string.sub(top[i].name, 1, nameW), nameColor, colors.black, nameW)
       local markerX = math.max(1, w - amountW - markerW + 1)
       local markerColor = colors.gray
-      if top[i].bulk == "auto" then markerColor = colors.lime elseif top[i].bulk == "hint" then markerColor = colors.cyan end
+      if top[i].bulk then markerColor = colors.purple end
       writeAt(markerX, y, marker, markerColor, colors.black, markerW)
       bulkButtons[screen][#bulkButtons[screen] + 1] = {x = markerX, x2 = markerX + markerW - 1, y = y, key = top[i].key, name = top[i].name}
-      writeAt(w - amountW + 1, y, amountText, colors.white, colors.black, amountW)
+      writeAt(w - amountW + 1, y, amountText, top[i].bulk and colors.purple or colors.white, colors.black, amountW)
       y = y + 1
     end
   end
