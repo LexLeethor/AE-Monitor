@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-02.5"
+local VERSION = "2026-07-02.6"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local STATE_FILE = ".ae2_usage_state"
@@ -854,46 +854,68 @@ while true do
     pageButtons[screen] = {}
     storedPages[screen] = math.max(1, n(storedPages[screen] or 1))
 
+  local topCollapsed = isCollapsed(screen, "top")
+  local now = os.epoch and math.floor(os.epoch("utc") / 1000) or os.time()
+  local watchColor = colors.gray
+  if #warnings > 0 then watchColor = colors.red elseif #recent > 0 then watchColor = colors.orange end
+
   clearLine(1, colors.cyan)
-  writeAt(2, 1, "AE2 SYSTEM", colors.black, colors.cyan)
+  writeAt(2, 1, (topCollapsed and "[+] AE2 SUMMARY" or "[-] AE2 SYSTEM"), colors.black, colors.cyan, math.max(8, w - 25))
+  sectionButtons[screen][#sectionButtons[screen] + 1] = {x = 1, x2 = math.max(1, w - 6), y = 1, section = "top"}
   updateButtons[screen] = {x = math.max(1, w - 4), x2 = w, y = 1}
   writeAt(w - 4, 1, "UPD", colors.white, colors.blue, 3)
   writeAt(w - 22, 1, textutils.formatTime(os.time(), true) .. " " .. itemTypes .. "I/" .. fluidTypes .. "F", colors.black, colors.cyan, 17)
 
-  tile(1, 3, tileW, "ITEMS", fmt(itemUsed) .. "/" .. (itemTotal > 0 and fmt(itemTotal) or "?"), fmt(itemCount) .. " stacks", colors.green)
-  tile(tileW + 3, 3, tileW, "TYPES", fmt(itemTypes) .. "/" .. (itemTypeTotal > 0 and fmt(itemTypeTotal) or "?"), itemCellCount .. " item cells", colors.yellow)
-  tile((tileW * 2) + 5, 3, math.max(10, w - ((tileW * 2) + 4)), "POWER", fmt(energy) .. "/" .. (energyCap > 0 and fmt(energyCap) or "?"), fmt(usage) .. "/t use " .. fmt(input) .. "/t in", colors.orange)
-
-  bar(1, 7, barW, "Items", itemUsed, itemTotal, colors.lime)
-  bar(1, 8, barW, "Types", itemTypes, itemTypeTotal, colors.yellow)
-  bar(1, 10, barW, "Fluids", fluidUsed, fluidTotal, colors.blue)
-  bar(1, 11, barW, "FTypes", fluidTypes, fluidTypeTotal, colors.cyan)
-  bar(1, 13, barW, "Power", energy, energyCap, colors.orange)
-
-  clearLine(15, healthColor)
-  writeAt(2, 15, health, colors.black, healthColor, 14)
-  writeAt(17, 15, healthDetail, colors.black, healthColor, w - 18)
-
-  clearLine(16, colors.gray)
-  local now = os.epoch and math.floor(os.epoch("utc") / 1000) or os.time()
-  if statusMessage and now < statusUntil then
-    writeAt(2, 16, statusMessage, colors.black, colors.gray, w - 2)
+  local nextY
+  if topCollapsed then
+    clearLine(2, healthColor)
+    writeAt(2, 2, health .. " - " .. healthDetail, colors.black, healthColor, w - 2)
+    clearLine(3, colors.gray)
+    writeAt(2, 3, "Items " .. math.floor(itemPct + 0.5) .. "%  Types " .. math.floor(typePct + 0.5) .. "%  Fluids " .. math.floor(fluidPct + 0.5) .. "%  Power " .. math.floor(powerPct + 0.5) .. "%  Jobs " .. jobs, colors.black, colors.gray, w - 2)
+    clearLine(4, watchColor)
+    if statusMessage and now < statusUntil then
+      writeAt(2, 4, statusMessage, colors.black, watchColor, w - 2)
+    elseif #warnings > 0 then
+      writeAt(2, 4, "DROP: " .. warnings[1].name .. " -" .. fmt(warnings[1].drop) .. " left " .. fmt(warnings[1].left), colors.white, colors.red, w - 2)
+    elseif #recent > 0 then
+      writeAt(2, 4, "MOVING: " .. recent[1].name .. " -" .. fmt(recent[1].drop) .. " left " .. fmt(recent[1].left), colors.black, colors.orange, w - 2)
+    else
+      writeAt(2, 4, "v" .. VERSION .. "  CELLS " .. countTable(cells) .. "  CPUs " .. countTable(cpus) .. "  JOBS " .. jobs, colors.black, colors.gray, w - 2)
+    end
+    nextY = 5
   else
-    writeAt(2, 16, "v" .. VERSION .. "  CELLS " .. countTable(cells) .. "  DRIVES " .. countTable(drives) .. "  CPUs " .. countTable(cpus) .. "  JOBS " .. jobs .. "  FLUID CELLS " .. fluidCellCount, colors.black, colors.gray)
+    tile(1, 3, tileW, "ITEMS", fmt(itemUsed) .. "/" .. (itemTotal > 0 and fmt(itemTotal) or "?"), fmt(itemCount) .. " stacks", colors.green)
+    tile(tileW + 3, 3, tileW, "TYPES", fmt(itemTypes) .. "/" .. (itemTypeTotal > 0 and fmt(itemTypeTotal) or "?"), itemCellCount .. " item cells", colors.yellow)
+    tile((tileW * 2) + 5, 3, math.max(10, w - ((tileW * 2) + 4)), "POWER", fmt(energy) .. "/" .. (energyCap > 0 and fmt(energyCap) or "?"), fmt(usage) .. "/t use " .. fmt(input) .. "/t in", colors.orange)
+
+    bar(1, 7, barW, "Items", itemUsed, itemTotal, colors.lime)
+    bar(1, 8, barW, "Types", itemTypes, itemTypeTotal, colors.yellow)
+    bar(1, 10, barW, "Fluids", fluidUsed, fluidTotal, colors.blue)
+    bar(1, 11, barW, "FTypes", fluidTypes, fluidTypeTotal, colors.cyan)
+    bar(1, 13, barW, "Power", energy, energyCap, colors.orange)
+
+    clearLine(15, healthColor)
+    writeAt(2, 15, health, colors.black, healthColor, 14)
+    writeAt(17, 15, healthDetail, colors.black, healthColor, w - 18)
+
+    clearLine(16, colors.gray)
+    if statusMessage and now < statusUntil then
+      writeAt(2, 16, statusMessage, colors.black, colors.gray, w - 2)
+    else
+      writeAt(2, 16, "v" .. VERSION .. "  CELLS " .. countTable(cells) .. "  DRIVES " .. countTable(drives) .. "  CPUs " .. countTable(cpus) .. "  JOBS " .. jobs .. "  FLUID CELLS " .. fluidCellCount, colors.black, colors.gray)
+    end
+
+    clearLine(17, watchColor)
+    if #warnings > 0 then
+      writeAt(2, 17, "CONFIRMED MATERIAL DROPS", colors.white, colors.red)
+    elseif #recent > 0 then
+      writeAt(2, 17, "MATERIALS MOVING - confirmed samples", colors.black, colors.orange)
+    else
+      writeAt(2, 17, "WATCH: repeated real count drops only", colors.black, colors.gray)
+    end
+    nextY = 18
   end
 
-  local watchColor = colors.gray
-  if #warnings > 0 then watchColor = colors.red elseif #recent > 0 then watchColor = colors.orange end
-  clearLine(17, watchColor)
-  if #warnings > 0 then
-    writeAt(2, 17, "CONFIRMED MATERIAL DROPS", colors.white, colors.red)
-  elseif #recent > 0 then
-    writeAt(2, 17, "MATERIALS MOVING - confirmed samples", colors.black, colors.orange)
-  else
-    writeAt(2, 17, "WATCH: repeated real count drops only", colors.black, colors.gray)
-  end
-
-  local nextY = 18
   if #warnings > 0 then
     warningButtons[screen] = {}
     for i = 1, math.min(#warnings, 3) do

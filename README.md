@@ -42,7 +42,7 @@ The biggest stored items list shows a `BULK` marker when the script can associat
 
 Tap `B+` beside a top item to manually mark it as bulk-backed. Tap `BULK` again to remove a manual marker. Manual markers persist in `.ae2_bulk_items`.
 
-Tap `PREV` / `NEXT` in the biggest stored items header to page through stored items when the list is longer than the monitor. Tap section headers marked `[-]` to collapse them and `[+]` to expand them again.
+Tap the top `[-] AE2 SYSTEM` header to collapse the large dashboard into a compact health summary; tap `[+] AE2 SUMMARY` to expand it again. Tap `PREV` / `NEXT` in the biggest stored items header to page through stored items when the list is longer than the monitor. Tap section headers marked `[-]` to collapse them and `[+]` to expand them again.
 
 You can also edit `.ae2_bulk_items` beside `startup.lua` directly and put one item id or display name per line:
 
