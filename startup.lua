@@ -5,7 +5,7 @@
 local bridge = peripheral.find("me_bridge")
 if not bridge then error("No me_bridge found. Attach an Advanced Peripherals ME Bridge.") end
 
-local VERSION = "2026-07-09.3"
+local VERSION = "2026-07-09.4"
 local POLL_SECONDS = 3
 local STALL_SECONDS = 90
 local DONE_GRACE_SECONDS = 20
@@ -386,10 +386,34 @@ local function selectOldest(rows)
   return selected
 end
 
-local function etaFor(row)
+local function etaFor(row, sampleTime)
   if not row then return nil end
   if row.amount and row.amount > 0 and row.rate and row.rate > 0 then
     return row.amount / row.rate
+  end
+  local elapsed = sampleTime and math.max(1, sampleTime - n(row.firstSeen)) or nil
+  local progress = n(row.progress)
+  local total = n(row.total)
+  if elapsed and elapsed > 0 and progress > 0 and total > 0 and progress < total then
+    local rate = progress / elapsed
+    if rate > 0 then
+      return math.max(0, (total - progress) / rate)
+    end
+  end
+  if elapsed and elapsed > 0 and row.amount and row.amount > 0 and row.progress and row.progress > 0 then
+    local rate = row.progress / elapsed
+    if rate > 0 then
+      return row.amount / rate
+    end
+  end
+  return nil
+end
+
+local function bestEta(rows, sampleTime)
+  if not rows then return nil end
+  for _, row in ipairs(rows) do
+    local eta = etaFor(row, sampleTime)
+    if eta then return eta, row end
   end
   return nil
 end
@@ -420,7 +444,11 @@ local function draw(selected, rows, moving, cpus, rawTaskCount, sampleTime)
       writeAt(2, 5, "Raw tasks " .. rawTaskCount .. "  CPUs " .. busyCpus .. "/" .. #cpus, colors.lightGray, colors.black, w - 2)
       writeAt(2, 7, "If a craft is running, check bridge API version", colors.gray, colors.black, w - 2)
     else
-      local eta = etaFor(selected)
+      local eta, etaRow = bestEta(rows, sampleTime)
+      if selected and not eta then
+        eta = etaFor(selected, sampleTime)
+        etaRow = selected
+      end
       local stalled = sampleTime - n(state.lastProgressAt) >= STALL_SECONDS
       local age = sampleTime - selected.firstSeen
       local statusColor = stalled and colors.red or colors.green
@@ -457,7 +485,7 @@ local function draw(selected, rows, moving, cpus, rawTaskCount, sampleTime)
       else
         for i = 1, math.min(#moving, MAX_PROCESSING_ROWS, h - y + 1) do
           local row = moving[i]
-          local rowEta = etaFor(row)
+          local rowEta = etaFor(row, sampleTime)
           local etaText = rowEta and fmtDuration(rowEta) or "?"
           local etaColor = rowEta and colors.yellow or colors.gray
           clearLine(y, colors.black)
