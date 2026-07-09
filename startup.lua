@@ -5,7 +5,7 @@
 local bridge = peripheral.find("me_bridge")
 if not bridge then error("No me_bridge found. Attach an Advanced Peripherals ME Bridge.") end
 
-local VERSION = "2026-07-09.1"
+local VERSION = "2026-07-09.2"
 local POLL_SECONDS = 3
 local STALL_SECONDS = 90
 local DONE_GRACE_SECONDS = 20
@@ -25,10 +25,7 @@ for _, name in ipairs(peripheral.getNames()) do
     end
   end
 end
-
-if #monitorTargets == 0 then
-  monitorTargets[1] = {name = "terminal", device = term.current()}
-end
+if #monitorTargets == 0 then monitorTargets[1] = {name = "terminal", device = term.current()} end
 
 local mon = monitorTargets[1].device
 
@@ -48,11 +45,33 @@ local function countTable(value)
   return count
 end
 
-local function callAny(names, default)
+local function bridgeCall(name, default, ...)
+  local fn = bridge[name]
+  if type(fn) ~= "function" then return default end
+  local ok, result = pcall(fn, ...)
+  if ok and result ~= nil then return result end
+  return default
+end
+
+local function callAny(names, default, ...)
   for _, name in ipairs(names) do
     local fn = bridge[name]
     if type(fn) == "function" then
+      local ok, result = pcall(fn, ...)
+      if ok and result ~= nil then return result end
+    end
+  end
+  return default
+end
+
+local function method(obj, names, default)
+  if type(obj) ~= "table" then return default end
+  for _, name in ipairs(names) do
+    local fn = obj[name]
+    if type(fn) == "function" then
       local ok, result = pcall(fn)
+      if ok and result ~= nil then return result end
+      ok, result = pcall(fn, obj)
       if ok and result ~= nil then return result end
     end
   end
@@ -114,6 +133,16 @@ local function cleanLabel(text)
   return text
 end
 
+local function itemLabel(item)
+  if type(item) ~= "table" then return nil end
+  return item.displayName or item.display_name or item.label or item.name or item.id or item.fingerprint
+end
+
+local function itemCount(item)
+  if type(item) ~= "table" then return 0 end
+  return n(item.amount or item.count or item.qty or item.quantity)
+end
+
 local function setColors(fg, bg)
   mon.setTextColor(fg or colors.white)
   mon.setBackgroundColor(bg or colors.black)
@@ -147,57 +176,118 @@ local function fillRect(x, y, rw, rh, bg)
   end
 end
 
-local function firstString(value, keys)
+local function fieldString(value, keys)
   if type(value) ~= "table" then return nil end
   for _, key in ipairs(keys) do
     local found = value[key]
     if type(found) == "string" and found ~= "" then return found end
     if type(found) == "table" then
-      local nested = firstString(found, keys)
+      local nested = itemLabel(found) or fieldString(found, keys)
       if nested then return nested end
     end
   end
   return nil
 end
 
-local function firstNumber(value, keys)
+local function fieldNumber(value, keys)
   if type(value) ~= "table" then return 0 end
   for _, key in ipairs(keys) do
     local found = value[key]
     if n(found) > 0 then return n(found) end
     if type(found) == "table" then
-      local nested = firstNumber(found, keys)
+      local nested = fieldNumber(found, keys)
       if nested > 0 then return nested end
     end
   end
   return 0
 end
 
-local function flattenTasks(tasks)
-  local flat = {}
-  for key, task in pairs(tasks or {}) do
-    if type(task) == "table" then
-      local id = tostring(
-        task.id or task.name or task.displayName or task.fingerprint or task.item or
-        task.output or task.result or task.toCraft or key
-      )
-      local label = firstString(task, {
-        "displayName", "display_name", "label", "name", "id", "fingerprint"
-      }) or id
-      local amount = firstNumber(task, {
-        "remaining", "amount", "count", "qty", "quantity", "requested",
-        "toCraft", "missing", "needed", "total"
-      })
-      flat[#flat + 1] = {
-        id = id,
-        label = cleanLabel(label),
-        amount = amount,
-        raw = task
-      }
-    elseif type(task) == "string" then
-      flat[#flat + 1] = {id = task, label = cleanLabel(task), amount = 0, raw = task}
+local function resourceFor(task, job)
+  if type(task) == "table" then
+    if type(task.resource) == "table" then return task.resource end
+    if type(task.finalOutput) == "table" then return task.finalOutput end
+    if type(task.output) == "table" then return task.output end
+    if type(task.item) == "table" then return task.item end
+  end
+  local fromJob = method(job, {"getFinalOutput", "getRequestedItem"}, nil)
+  if type(fromJob) == "table" then return fromJob end
+  return nil
+end
+
+local function taskFromObject(key, task, source)
+  local job = type(task) == "table" and (task.craftingJob or task.job or task.craftJob) or nil
+  if not job and type(task) == "table" then job = task end
+
+  local total = fieldNumber(task, {"quantity", "total", "totalItems", "requested", "amount", "count"})
+  local progress = fieldNumber(task, {"crafted", "progress", "itemProgress", "emitted"})
+  local completion = type(task) == "table" and n(task.completion) or 0
+
+  local jobTotal = n(method(job, {"getTotalItems"}, 0))
+  local jobProgress = n(method(job, {"getItemProgress"}, 0))
+  if jobTotal > 0 then total = jobTotal end
+  if jobProgress > 0 then progress = jobProgress end
+
+  local remaining = fieldNumber(task, {"remaining", "missing", "needed", "toCraft"})
+  if remaining <= 0 and total > 0 then
+    if progress > 0 then
+      remaining = math.max(0, total - progress)
+    elseif completion > 0 and completion <= 1 then
+      remaining = math.max(0, total * (1 - completion))
+    else
+      remaining = total
     end
   end
+
+  local resource = resourceFor(task, job)
+  local label = itemLabel(resource) or fieldString(task, {
+    "displayName", "display_name", "label", "name", "id", "fingerprint"
+  }) or tostring(key)
+  local id = tostring(
+    (type(task) == "table" and (task.bridge_id or task.id)) or
+    method(job, {"getId"}, nil) or
+    (type(resource) == "table" and (resource.fingerprint or resource.name or resource.id)) or
+    key
+  )
+
+  if method(job, {"isDone"}, false) or method(job, {"isCanceled"}, false) then return nil end
+  if type(task) == "number" or type(task) == "string" then
+    local fetched = bridgeCall("getCraftingTask", nil, task) or bridgeCall("getCraftingJob", nil, task)
+    if fetched then return taskFromObject(task, fetched, source) end
+  end
+
+  return {
+    id = id,
+    label = cleanLabel(label),
+    amount = remaining,
+    total = total,
+    progress = progress,
+    completion = completion,
+    source = source or "task"
+  }
+end
+
+local function flattenTasks(tasks, cpus)
+  local flat = {}
+  local seen = {}
+
+  for key, task in pairs(tasks or {}) do
+    local row = taskFromObject(key, task, "task")
+    if row and not seen[row.id] then
+      seen[row.id] = true
+      flat[#flat + 1] = row
+    end
+  end
+
+  for key, cpu in pairs(cpus or {}) do
+    if type(cpu) == "table" and (cpu.isBusy or cpu.busy or cpu.active or cpu.crafting) and type(cpu.craftingJob) == "table" then
+      local row = taskFromObject(key, cpu.craftingJob, "cpu")
+      if row and not seen[row.id] then
+        seen[row.id] = true
+        flat[#flat + 1] = row
+      end
+    end
+  end
+
   return flat
 end
 
@@ -205,11 +295,10 @@ local function flattenCpus(cpus)
   local flat = {}
   for key, cpu in pairs(cpus or {}) do
     if type(cpu) == "table" then
-      local busy = cpu.busy or cpu.isBusy or cpu.active or cpu.crafting
-      if busy == nil then busy = cpu.finalOutput or cpu.output or cpu.item end
-      local label = firstString(cpu, {
-        "displayName", "name", "finalOutput", "output", "item", "id"
-      }) or ("CPU " .. tostring(key))
+      local busy = cpu.isBusy or cpu.busy or cpu.active or cpu.crafting
+      if busy == nil then busy = cpu.craftingJob end
+      local resource = type(cpu.craftingJob) == "table" and resourceFor(cpu.craftingJob, cpu.craftingJob) or nil
+      local label = itemLabel(resource) or fieldString(cpu, {"displayName", "name", "finalOutput", "output", "item", "id"}) or ("CPU " .. tostring(key))
       flat[#flat + 1] = {
         id = tostring(cpu.name or cpu.id or key),
         label = cleanLabel(label),
@@ -220,59 +309,47 @@ local function flattenCpus(cpus)
   return flat
 end
 
-local state = {
-  tasks = {},
-  selectedId = nil,
-  selectedDoneAt = 0,
-  lastProgressAt = now()
-}
+local state = {tasks = {}, selectedId = nil, lastProgressAt = now()}
 
 local function updateState(tasks, sampleTime)
   local active = {}
-
   for _, task in ipairs(tasks) do
     local id = task.id
     active[id] = true
     local old = state.tasks[id]
     if not old then
-      old = {
-        firstSeen = sampleTime,
-        lastSeen = sampleTime,
-        lastAmount = task.amount,
-        lastProgress = sampleTime,
-        rate = 0,
-        maxAmount = task.amount
-      }
+      old = {firstSeen = sampleTime, lastSeen = sampleTime, lastAmount = task.amount, lastProgress = sampleTime, rate = 0}
     else
       local delta = n(old.lastAmount) - n(task.amount)
       local elapsed = math.max(1, sampleTime - n(old.lastSeen))
       if delta > 0 then
         local instant = delta / elapsed
-        if n(old.rate) > 0 then
-          old.rate = (old.rate * 0.65) + (instant * 0.35)
-        else
-          old.rate = instant
-        end
+        old.rate = n(old.rate) > 0 and ((old.rate * 0.65) + (instant * 0.35)) or instant
         old.lastProgress = sampleTime
         state.lastProgressAt = sampleTime
-      elseif task.amount > n(old.maxAmount) then
-        old.maxAmount = task.amount
+      elseif n(task.progress) > n(old.lastProgressValue) then
+        local instant = (n(task.progress) - n(old.lastProgressValue)) / elapsed
+        old.rate = n(old.rate) > 0 and ((old.rate * 0.65) + (instant * 0.35)) or instant
+        old.lastProgress = sampleTime
+        state.lastProgressAt = sampleTime
       end
       old.lastAmount = task.amount
       old.lastSeen = sampleTime
     end
     old.label = task.label
     old.amount = task.amount
+    old.total = task.total
+    old.progress = task.progress
+    old.completion = task.completion
+    old.source = task.source
+    old.lastProgressValue = task.progress
     state.tasks[id] = old
   end
 
   for id, tracked in pairs(state.tasks) do
     if not active[id] and sampleTime - n(tracked.lastSeen) > DONE_GRACE_SECONDS then
       state.tasks[id] = nil
-      if state.selectedId == id then
-        state.selectedId = nil
-        state.selectedDoneAt = sampleTime
-      end
+      if state.selectedId == id then state.selectedId = nil end
     end
   end
 end
@@ -284,9 +361,13 @@ local function taskRows()
       id = id,
       label = task.label or id,
       amount = n(task.amount),
+      total = n(task.total),
+      progress = n(task.progress),
+      completion = n(task.completion),
       rate = n(task.rate),
       firstSeen = n(task.firstSeen),
-      lastProgress = n(task.lastProgress)
+      lastProgress = n(task.lastProgress),
+      source = task.source or "task"
     }
   end
   table.sort(rows, function(a, b)
@@ -298,9 +379,7 @@ end
 
 local function selectOldest(rows)
   if state.selectedId then
-    for _, row in ipairs(rows) do
-      if row.id == state.selectedId then return row end
-    end
+    for _, row in ipairs(rows) do if row.id == state.selectedId then return row end end
   end
   local selected = rows[1]
   state.selectedId = selected and selected.id or nil
@@ -312,7 +391,6 @@ local function etaFor(selected, rows)
   local dependencySeconds = 0
   local dependencyRemaining = 0
   local selectedSeconds = nil
-
   for _, row in ipairs(rows) do
     if row.id == selected.id then
       if row.amount > 0 and row.rate > 0 then selectedSeconds = row.amount / row.rate end
@@ -321,26 +399,19 @@ local function etaFor(selected, rows)
       if row.rate > 0 then dependencySeconds = dependencySeconds + (row.amount / row.rate) end
     end
   end
-
-  if selectedSeconds then
-    return dependencySeconds + selectedSeconds, dependencySeconds, dependencyRemaining
-  end
-  if dependencySeconds > 0 then
-    return dependencySeconds, dependencySeconds, dependencyRemaining
-  end
+  if selectedSeconds then return dependencySeconds + selectedSeconds, dependencySeconds, dependencyRemaining end
+  if dependencySeconds > 0 then return dependencySeconds, dependencySeconds, dependencyRemaining end
   return nil, dependencySeconds, dependencyRemaining
 end
 
 local function progressRows(rows)
   local moving = {}
-  for _, row in ipairs(rows) do
-    if row.rate > 0 then moving[#moving + 1] = row end
-  end
+  for _, row in ipairs(rows) do if row.rate > 0 then moving[#moving + 1] = row end end
   table.sort(moving, function(a, b) return a.rate > b.rate end)
   return moving
 end
 
-local function draw(selected, rows, moving, cpus, sampleTime)
+local function draw(selected, rows, moving, cpus, rawTaskCount, sampleTime)
   for _, target in ipairs(monitorTargets) do
     mon = target.device
     mon.setBackgroundColor(colors.black)
@@ -356,92 +427,91 @@ local function draw(selected, rows, moving, cpus, sampleTime)
     if not selected then
       clearLine(3, colors.gray)
       writeAt(2, 3, "No active crafting task", colors.black, colors.gray, w - 2)
-      writeAt(2, 5, "CPUs busy: " .. busyCpus .. "/" .. countTable(cpus), colors.lightGray, colors.black, w - 2)
-      writeAt(2, 7, "Waiting for AE2 crafting tasks...", colors.gray, colors.black, w - 2)
+      writeAt(2, 5, "Raw tasks " .. rawTaskCount .. "  CPUs " .. busyCpus .. "/" .. #cpus, colors.lightGray, colors.black, w - 2)
+      writeAt(2, 7, "If a craft is running, check bridge API version", colors.gray, colors.black, w - 2)
     else
+      local eta, dependencySeconds, dependencyRemaining = etaFor(selected, rows)
+      local stalled = sampleTime - n(state.lastProgressAt) >= STALL_SECONDS
+      local age = sampleTime - selected.firstSeen
+      local statusColor = stalled and colors.red or colors.green
+      local statusText = stalled and ("POSSIBLE STALL " .. fmtDuration(sampleTime - state.lastProgressAt)) or "CRAFTING"
 
-    local eta, dependencySeconds, dependencyRemaining = etaFor(selected, rows)
-    local stalled = sampleTime - n(state.lastProgressAt) >= STALL_SECONDS
-    local age = sampleTime - selected.firstSeen
-    local statusColor = stalled and colors.red or colors.green
-    local statusText = stalled and ("POSSIBLE STALL " .. fmtDuration(sampleTime - state.lastProgressAt)) or "CRAFTING"
+      clearLine(3, statusColor)
+      writeAt(2, 3, statusText, stalled and colors.white or colors.black, statusColor, w - 2)
 
-    clearLine(3, statusColor)
-    writeAt(2, 3, statusText, stalled and colors.white or colors.black, statusColor, w - 2)
+      writeAt(2, 5, "Task", colors.lightGray, colors.black, 10)
+      writeAt(13, 5, selected.label, colors.white, colors.black, w - 13)
+      writeAt(2, 6, "Left", colors.lightGray, colors.black, 10)
+      writeAt(13, 6, fmtAmount(selected.amount), colors.white, colors.black, 16)
+      writeAt(31, 6, "Rate", colors.lightGray, colors.black, 6)
+      writeAt(38, 6, fmtRate(selected.rate), colors.white, colors.black, 14)
 
-    writeAt(2, 5, "Task", colors.lightGray, colors.black, 10)
-    writeAt(13, 5, selected.label, colors.white, colors.black, w - 13)
-
-    writeAt(2, 6, "Left", colors.lightGray, colors.black, 10)
-    writeAt(13, 6, fmtAmount(selected.amount), colors.white, colors.black, 16)
-    writeAt(31, 6, "Rate", colors.lightGray, colors.black, 6)
-    writeAt(38, 6, fmtRate(selected.rate), colors.white, colors.black, 14)
-
-    writeAt(2, 7, "ETA", colors.lightGray, colors.black, 10)
-    if eta then
-      writeAt(13, 7, fmtDuration(eta), colors.yellow, colors.black, 16)
-      if dependencyRemaining > 0 and dependencySeconds > 0 then
-        writeAt(31, 7, "includes " .. fmtDuration(dependencySeconds) .. " before task", colors.orange, colors.black, w - 31)
-      end
-    else
-      writeAt(13, 7, "learning...", colors.yellow, colors.black, 16)
-      if dependencyRemaining > 0 then
-        writeAt(31, 7, fmtAmount(dependencyRemaining) .. " items ahead/alongside", colors.orange, colors.black, w - 31)
-      end
-    end
-
-    writeAt(2, 8, "Age", colors.lightGray, colors.black, 10)
-    writeAt(13, 8, fmtDuration(age), colors.white, colors.black, 16)
-    writeAt(31, 8, "CPUs " .. busyCpus .. "/" .. countTable(cpus) .. "  Jobs " .. #rows, colors.lightGray, colors.black, w - 31)
-
-    fillRect(1, 10, w, 1, colors.gray)
-    writeAt(2, 10, "CURRENTLY PROCESSING", colors.black, colors.gray, w - 2)
-
-    local y = 11
-    if #moving == 0 then
-      clearLine(y, colors.black)
-      writeAt(2, y, stalled and "No measured progress from AE task counts" or "Waiting for count movement...", colors.lightGray, colors.black, w - 2)
-      y = y + 1
-    else
-      for i = 1, math.min(#moving, MAX_PROCESSING_ROWS, h - y + 1) do
-        local row = moving[i]
-        clearLine(y, colors.black)
-        writeAt(2, y, row.label, row.id == selected.id and colors.white or colors.lightGray, colors.black, math.max(8, w - 27))
-        writeAt(math.max(1, w - 24), y, fmtAmount(row.amount), colors.yellow, colors.black, 10)
-        writeAt(math.max(1, w - 12), y, fmtRate(row.rate), colors.cyan, colors.black, 12)
-        y = y + 1
-      end
-    end
-
-    if y <= h then
-      fillRect(1, y, w, 1, colors.gray)
-      writeAt(2, y, "ACTIVE CRAFTING CPUS", colors.black, colors.gray, w - 2)
-      y = y + 1
-      local shown = 0
-      for _, cpu in ipairs(cpus) do
-        if cpu.busy and y <= h then
-          clearLine(y, colors.black)
-          writeAt(2, y, cpu.label, colors.lightGray, colors.black, w - 2)
-          y = y + 1
-          shown = shown + 1
+      writeAt(2, 7, "ETA", colors.lightGray, colors.black, 10)
+      if eta then
+        writeAt(13, 7, fmtDuration(eta), colors.yellow, colors.black, 16)
+        if dependencyRemaining > 0 and dependencySeconds > 0 then
+          writeAt(31, 7, "includes " .. fmtDuration(dependencySeconds) .. " before task", colors.orange, colors.black, w - 31)
+        end
+      else
+        writeAt(13, 7, "learning...", colors.yellow, colors.black, 16)
+        if dependencyRemaining > 0 then
+          writeAt(31, 7, fmtAmount(dependencyRemaining) .. " items ahead/alongside", colors.orange, colors.black, w - 31)
         end
       end
-      if shown == 0 and y <= h then
+
+      writeAt(2, 8, "Age", colors.lightGray, colors.black, 10)
+      writeAt(13, 8, fmtDuration(age), colors.white, colors.black, 16)
+      writeAt(31, 8, "CPUs " .. busyCpus .. "/" .. #cpus .. "  Jobs " .. #rows .. "  Raw " .. rawTaskCount, colors.lightGray, colors.black, w - 31)
+
+      fillRect(1, 10, w, 1, colors.gray)
+      writeAt(2, 10, "CURRENTLY PROCESSING", colors.black, colors.gray, w - 2)
+      local y = 11
+      if #moving == 0 then
         clearLine(y, colors.black)
-        writeAt(2, y, "No busy CPU detail exposed", colors.gray, colors.black, w - 2)
+        writeAt(2, y, stalled and "No measured progress from AE task counts" or "Waiting for count movement...", colors.lightGray, colors.black, w - 2)
+        y = y + 1
+      else
+        for i = 1, math.min(#moving, MAX_PROCESSING_ROWS, h - y + 1) do
+          local row = moving[i]
+          clearLine(y, colors.black)
+          writeAt(2, y, row.label, row.id == selected.id and colors.white or colors.lightGray, colors.black, math.max(8, w - 27))
+          writeAt(math.max(1, w - 24), y, fmtAmount(row.amount), colors.yellow, colors.black, 10)
+          writeAt(math.max(1, w - 12), y, fmtRate(row.rate), colors.cyan, colors.black, 12)
+          y = y + 1
+        end
       end
-    end
+
+      if y <= h then
+        fillRect(1, y, w, 1, colors.gray)
+        writeAt(2, y, "ACTIVE CRAFTING CPUS", colors.black, colors.gray, w - 2)
+        y = y + 1
+        local shown = 0
+        for _, cpu in ipairs(cpus) do
+          if cpu.busy and y <= h then
+            clearLine(y, colors.black)
+            writeAt(2, y, cpu.label, colors.lightGray, colors.black, w - 2)
+            y = y + 1
+            shown = shown + 1
+          end
+        end
+        if shown == 0 and y <= h then
+          clearLine(y, colors.black)
+          writeAt(2, y, "No busy CPU detail exposed", colors.gray, colors.black, w - 2)
+        end
+      end
     end
   end
 end
 
 while true do
   local sampleTime = now()
-  local tasks = flattenTasks(callAny({"getCraftingTasks", "listCraftingTasks"}, {}) or {})
-  local cpus = flattenCpus(callAny({"getCraftingCPUs", "listCraftingCPUs"}, {}) or {})
+  local rawTasks = callAny({"getCraftingTasks", "listCraftingTasks"}, {}) or {}
+  local rawCpus = callAny({"getCraftingCPUs", "listCraftingCPUs"}, {}) or {}
+  local cpus = flattenCpus(rawCpus)
+  local tasks = flattenTasks(rawTasks, rawCpus)
   updateState(tasks, sampleTime)
   local rows = taskRows()
   local selected = selectOldest(rows)
-  draw(selected, rows, progressRows(rows), cpus, sampleTime)
+  draw(selected, rows, progressRows(rows), cpus, countTable(rawTasks), sampleTime)
   sleep(POLL_SECONDS)
 end
