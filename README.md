@@ -8,7 +8,7 @@ Run this on the ComputerCraft computer:
 
 ```lua
 delete startup.lua
-wget https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua startup.lua
+wget https://raw.githubusercontent.com/lexleethor/ae-monitor/main/startup.lua startup.lua
 reboot
 ```
 

@@ -5,7 +5,7 @@
 local bridge = peripheral.find("me_bridge")
 if not bridge then error("No me_bridge found. Attach an Advanced Peripherals ME Bridge.") end
 
-local VERSION = "2026-07-09.2"
+local VERSION = "2026-07-09.3"
 local POLL_SECONDS = 3
 local STALL_SECONDS = 90
 local DONE_GRACE_SECONDS = 20
@@ -386,22 +386,12 @@ local function selectOldest(rows)
   return selected
 end
 
-local function etaFor(selected, rows)
-  if not selected then return nil, 0, 0 end
-  local dependencySeconds = 0
-  local dependencyRemaining = 0
-  local selectedSeconds = nil
-  for _, row in ipairs(rows) do
-    if row.id == selected.id then
-      if row.amount > 0 and row.rate > 0 then selectedSeconds = row.amount / row.rate end
-    elseif row.amount > 0 then
-      dependencyRemaining = dependencyRemaining + row.amount
-      if row.rate > 0 then dependencySeconds = dependencySeconds + (row.amount / row.rate) end
-    end
+local function etaFor(row)
+  if not row then return nil end
+  if row.amount and row.amount > 0 and row.rate and row.rate > 0 then
+    return row.amount / row.rate
   end
-  if selectedSeconds then return dependencySeconds + selectedSeconds, dependencySeconds, dependencyRemaining end
-  if dependencySeconds > 0 then return dependencySeconds, dependencySeconds, dependencyRemaining end
-  return nil, dependencySeconds, dependencyRemaining
+  return nil
 end
 
 local function progressRows(rows)
@@ -430,7 +420,7 @@ local function draw(selected, rows, moving, cpus, rawTaskCount, sampleTime)
       writeAt(2, 5, "Raw tasks " .. rawTaskCount .. "  CPUs " .. busyCpus .. "/" .. #cpus, colors.lightGray, colors.black, w - 2)
       writeAt(2, 7, "If a craft is running, check bridge API version", colors.gray, colors.black, w - 2)
     else
-      local eta, dependencySeconds, dependencyRemaining = etaFor(selected, rows)
+      local eta = etaFor(selected)
       local stalled = sampleTime - n(state.lastProgressAt) >= STALL_SECONDS
       local age = sampleTime - selected.firstSeen
       local statusColor = stalled and colors.red or colors.green
@@ -449,14 +439,8 @@ local function draw(selected, rows, moving, cpus, rawTaskCount, sampleTime)
       writeAt(2, 7, "ETA", colors.lightGray, colors.black, 10)
       if eta then
         writeAt(13, 7, fmtDuration(eta), colors.yellow, colors.black, 16)
-        if dependencyRemaining > 0 and dependencySeconds > 0 then
-          writeAt(31, 7, "includes " .. fmtDuration(dependencySeconds) .. " before task", colors.orange, colors.black, w - 31)
-        end
       else
         writeAt(13, 7, "learning...", colors.yellow, colors.black, 16)
-        if dependencyRemaining > 0 then
-          writeAt(31, 7, fmtAmount(dependencyRemaining) .. " items ahead/alongside", colors.orange, colors.black, w - 31)
-        end
       end
 
       writeAt(2, 8, "Age", colors.lightGray, colors.black, 10)
@@ -473,10 +457,14 @@ local function draw(selected, rows, moving, cpus, rawTaskCount, sampleTime)
       else
         for i = 1, math.min(#moving, MAX_PROCESSING_ROWS, h - y + 1) do
           local row = moving[i]
+          local rowEta = etaFor(row)
+          local etaText = rowEta and fmtDuration(rowEta) or "?"
+          local etaColor = rowEta and colors.yellow or colors.gray
           clearLine(y, colors.black)
-          writeAt(2, y, row.label, row.id == selected.id and colors.white or colors.lightGray, colors.black, math.max(8, w - 27))
-          writeAt(math.max(1, w - 24), y, fmtAmount(row.amount), colors.yellow, colors.black, 10)
-          writeAt(math.max(1, w - 12), y, fmtRate(row.rate), colors.cyan, colors.black, 12)
+          writeAt(2, y, row.label, row.id == selected.id and colors.white or colors.lightGray, colors.black, math.max(8, w - 44))
+          writeAt(math.max(1, w - 40), y, fmtAmount(row.amount), colors.yellow, colors.black, 8)
+          writeAt(math.max(1, w - 28), y, fmtRate(row.rate), colors.cyan, colors.black, 8)
+          writeAt(math.max(1, w - 16), y, etaText, etaColor, colors.black, 10)
           y = y + 1
         end
       end
