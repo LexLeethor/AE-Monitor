@@ -5,7 +5,7 @@
 local bridge = peripheral.find("me_bridge")
 if not bridge then error("No me_bridge found. Attach an Advanced Peripherals ME Bridge.") end
 
-local VERSION = "2026-07-10"
+local VERSION = "2026-07-10.1"
 local POLL_SECONDS = 3
 local STALL_SECONDS = 90
 local DONE_GRACE_SECONDS = 20
@@ -214,6 +214,59 @@ local function resourceFor(task, job)
   return nil
 end
 
+local function stackLabel(stack)
+  if type(stack) ~= "table" then return nil end
+  return itemLabel(stack) or fieldString(stack, {"displayName", "display_name", "label", "name", "id", "fingerprint"}) or nil
+end
+
+local function stackAmount(stack)
+  if type(stack) ~= "table" then return 0 end
+  return n(stack.amount or stack.count or stack.qty or stack.quantity or stack.size or stack.total or stack.remaining)
+end
+
+local function addDetailRows(job, parentRow, rows, seen, source)
+  if type(job) ~= "table" then return end
+  local detailMethods = {{"getUsedItems", "used"}, {"getMissingItems", "missing"}, {"getEmittedItems", "emitted"}}
+  for _, entry in ipairs(detailMethods) do
+    local methodName, kind = entry[1], entry[2]
+    local detail = method(job, {methodName}, nil)
+    if type(detail) == "table" then
+      for _, stack in pairs(detail) do
+        local label = stackLabel(stack)
+        local amount = stackAmount(stack)
+        if label and amount > 0 then
+          local itemId = tostring((parentRow and parentRow.id or "job") .. ":" .. (stack.fingerprint or stack.name or stack.id or label) .. ":" .. kind)
+          if not seen[itemId] then
+            seen[itemId] = true
+            rows[#rows + 1] = {
+              id = itemId,
+              label = cleanLabel(label),
+              amount = amount,
+              total = amount,
+              progress = amount,
+              completion = 1,
+              source = source or kind
+            }
+          end
+        end
+      end
+    end
+  end
+end
+
+local function buildTaskRowsForTask(key, task, source)
+  local job = type(task) == "table" and (task.craftingJob or task.job or task.craftJob) or nil
+  if not job and type(task) == "table" then job = task end
+
+  local baseRow = taskFromObject(key, task, source)
+  if not baseRow then return {} end
+
+  local rows = {baseRow}
+  local seen = {[baseRow.id] = true}
+  addDetailRows(job, baseRow, rows, seen, source)
+  return rows
+end
+
 local function taskFromObject(key, task, source)
   local job = type(task) == "table" and (task.craftingJob or task.job or task.craftJob) or nil
   if not job and type(task) == "table" then job = task end
@@ -271,19 +324,21 @@ local function flattenTasks(tasks, cpus)
   local seen = {}
 
   for key, task in pairs(tasks or {}) do
-    local row = taskFromObject(key, task, "task")
-    if row and not seen[row.id] then
-      seen[row.id] = true
-      flat[#flat + 1] = row
+    for _, row in ipairs(buildTaskRowsForTask(key, task, "task")) do
+      if row and not seen[row.id] then
+        seen[row.id] = true
+        flat[#flat + 1] = row
+      end
     end
   end
 
   for key, cpu in pairs(cpus or {}) do
     if type(cpu) == "table" and (cpu.isBusy or cpu.busy or cpu.active or cpu.crafting) and type(cpu.craftingJob) == "table" then
-      local row = taskFromObject(key, cpu.craftingJob, "cpu")
-      if row and not seen[row.id] then
-        seen[row.id] = true
-        flat[#flat + 1] = row
+      for _, row in ipairs(buildTaskRowsForTask(key, cpu.craftingJob, "cpu")) do
+        if row and not seen[row.id] then
+          seen[row.id] = true
+          flat[#flat + 1] = row
+        end
       end
     end
   end
