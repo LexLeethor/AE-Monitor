@@ -5,7 +5,7 @@
 local bridge = peripheral.find("me_bridge")
 if not bridge then error("No me_bridge found. Attach an Advanced Peripherals ME Bridge.") end
 
-local VERSION = "2026-07-10.4"
+local VERSION = "2026-07-10.5"
 local POLL_SECONDS = 3
 local STALL_SECONDS = 90
 local DONE_GRACE_SECONDS = 20
@@ -275,21 +275,34 @@ local function addDetailRows(job, parentRow, rows, seen, source)
   end
 end
 
+-- Forward declaration: buildTaskRowsForTask (below) calls taskFromObject
+-- before taskFromObject's own definition is reached lexically. Because
+-- `local function taskFromObject(...)` only creates the local from that
+-- line onward, referencing it earlier resolves to a nonexistent global
+-- and crashes with "attempt to call a nil value". Declaring it here and
+-- assigning it later (without `local`) fixes that.
+local taskFromObject
+
 local function buildTaskRowsForTask(key, task, source)
   if task == nil then return {} end
   local job = type(task) == "table" and (task.craftingJob or task.job or task.craftJob) or nil
   if not job and type(task) == "table" then job = task end
 
-  local baseRow = taskFromObject(key, task, source)
-  if not baseRow then return {} end
+  local ok, result = pcall(function()
+    local baseRow = taskFromObject(key, task, source)
+    if not baseRow then return {} end
 
-  local rows = {baseRow}
-  local seen = {[baseRow.id] = true}
-  addDetailRows(job, baseRow, rows, seen, source)
-  return rows
+    local rows = {baseRow}
+    local seen = {[baseRow.id] = true}
+    addDetailRows(job, baseRow, rows, seen, source)
+    return rows
+  end)
+
+  if not ok then return {} end
+  return result or {}
 end
 
-local function taskFromObject(key, task, source)
+taskFromObject = function(key, task, source)
   if task == nil then return nil end
   local job = type(task) == "table" and (task.craftingJob or task.job or task.craftJob) or nil
   if not job and type(task) == "table" then job = task end
