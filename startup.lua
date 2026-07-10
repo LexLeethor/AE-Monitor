@@ -5,7 +5,7 @@
 local bridge = peripheral.find("me_bridge")
 if not bridge then error("No me_bridge found. Attach an Advanced Peripherals ME Bridge.") end
 
-local VERSION = "2026-07-10.1"
+local VERSION = "2026-07-10.2"
 local POLL_SECONDS = 3
 local STALL_SECONDS = 90
 local DONE_GRACE_SECONDS = 20
@@ -224,6 +224,24 @@ local function stackAmount(stack)
   return n(stack.amount or stack.count or stack.qty or stack.quantity or stack.size or stack.total or stack.remaining)
 end
 
+local function completionFractionFor(job, parentRow)
+  if type(parentRow) == "table" then
+    local completion = n(parentRow.completion)
+    if completion > 0 and completion <= 1 then return completion end
+    local total = n(parentRow.total)
+    local progress = n(parentRow.progress)
+    if total > 0 and progress > 0 then
+      return math.max(0, math.min(1, progress / total))
+    end
+  end
+  local total = n(method(job, {"getTotalItems"}, 0))
+  if total > 0 then
+    local progress = n(method(job, {"getItemProgress"}, 0))
+    if progress > 0 then return math.max(0, math.min(1, progress / total)) end
+  end
+  return 0
+end
+
 local function addDetailRows(job, parentRow, rows, seen, source)
   if type(job) ~= "table" then return end
   local detailMethods = {{"getUsedItems", "used"}, {"getMissingItems", "missing"}, {"getEmittedItems", "emitted"}}
@@ -235,16 +253,19 @@ local function addDetailRows(job, parentRow, rows, seen, source)
         local label = stackLabel(stack)
         local amount = stackAmount(stack)
         if label and amount > 0 then
+          local completion = completionFractionFor(job, parentRow)
+          local remaining = math.max(0, amount * (1 - completion))
+          local progress = math.max(0, amount * completion)
           local itemId = tostring((parentRow and parentRow.id or "job") .. ":" .. (stack.fingerprint or stack.name or stack.id or label) .. ":" .. kind)
           if not seen[itemId] then
             seen[itemId] = true
             rows[#rows + 1] = {
               id = itemId,
               label = cleanLabel(label),
-              amount = amount,
+              amount = remaining,
               total = amount,
-              progress = amount,
-              completion = 1,
+              progress = progress,
+              completion = completion,
               source = source or kind
             }
           end
