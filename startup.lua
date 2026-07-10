@@ -5,7 +5,7 @@
 local bridge = peripheral.find("me_bridge")
 if not bridge then error("No me_bridge found. Attach an Advanced Peripherals ME Bridge.") end
 
-local VERSION = "2026-07-09.4"
+local VERSION = "2026-07-10"
 local POLL_SECONDS = 3
 local STALL_SECONDS = 90
 local DONE_GRACE_SECONDS = 20
@@ -444,11 +444,6 @@ local function draw(selected, rows, moving, cpus, rawTaskCount, sampleTime)
       writeAt(2, 5, "Raw tasks " .. rawTaskCount .. "  CPUs " .. busyCpus .. "/" .. #cpus, colors.lightGray, colors.black, w - 2)
       writeAt(2, 7, "If a craft is running, check bridge API version", colors.gray, colors.black, w - 2)
     else
-      local eta, etaRow = bestEta(rows, sampleTime)
-      if selected and not eta then
-        eta = etaFor(selected, sampleTime)
-        etaRow = selected
-      end
       local stalled = sampleTime - n(state.lastProgressAt) >= STALL_SECONDS
       local age = sampleTime - selected.firstSeen
       local statusColor = stalled and colors.red or colors.green
@@ -461,19 +456,12 @@ local function draw(selected, rows, moving, cpus, rawTaskCount, sampleTime)
       writeAt(13, 5, selected.label, colors.white, colors.black, w - 13)
       writeAt(2, 6, "Left", colors.lightGray, colors.black, 10)
       writeAt(13, 6, fmtAmount(selected.amount), colors.white, colors.black, 16)
-      writeAt(31, 6, "Rate", colors.lightGray, colors.black, 6)
+      writeAt(31, 6, "TP/s", colors.lightGray, colors.black, 6)
       writeAt(38, 6, fmtRate(selected.rate), colors.white, colors.black, 14)
 
-      writeAt(2, 7, "ETA", colors.lightGray, colors.black, 10)
-      if eta then
-        writeAt(13, 7, fmtDuration(eta), colors.yellow, colors.black, 16)
-      else
-        writeAt(13, 7, "learning...", colors.yellow, colors.black, 16)
-      end
-
-      writeAt(2, 8, "Age", colors.lightGray, colors.black, 10)
-      writeAt(13, 8, fmtDuration(age), colors.white, colors.black, 16)
-      writeAt(31, 8, "CPUs " .. busyCpus .. "/" .. #cpus .. "  Jobs " .. #rows .. "  Raw " .. rawTaskCount, colors.lightGray, colors.black, w - 31)
+      writeAt(2, 7, "Age", colors.lightGray, colors.black, 10)
+      writeAt(13, 7, fmtDuration(age), colors.white, colors.black, 16)
+      writeAt(31, 7, "CPUs " .. busyCpus .. "/" .. #cpus .. "  Jobs " .. #rows .. "  Raw " .. rawTaskCount, colors.lightGray, colors.black, w - 31)
 
       fillRect(1, 10, w, 1, colors.gray)
       writeAt(2, 10, "CURRENTLY PROCESSING", colors.black, colors.gray, w - 2)
@@ -485,14 +473,10 @@ local function draw(selected, rows, moving, cpus, rawTaskCount, sampleTime)
       else
         for i = 1, math.min(#moving, MAX_PROCESSING_ROWS, h - y + 1) do
           local row = moving[i]
-          local rowEta = etaFor(row, sampleTime)
-          local etaText = rowEta and fmtDuration(rowEta) or "?"
-          local etaColor = rowEta and colors.yellow or colors.gray
           clearLine(y, colors.black)
-          writeAt(2, y, row.label, row.id == selected.id and colors.white or colors.lightGray, colors.black, math.max(8, w - 44))
-          writeAt(math.max(1, w - 40), y, fmtAmount(row.amount), colors.yellow, colors.black, 8)
-          writeAt(math.max(1, w - 28), y, fmtRate(row.rate), colors.cyan, colors.black, 8)
-          writeAt(math.max(1, w - 16), y, etaText, etaColor, colors.black, 10)
+          writeAt(2, y, row.label, row.id == selected.id and colors.white or colors.lightGray, colors.black, math.max(8, w - 36))
+          writeAt(math.max(1, w - 32), y, fmtAmount(row.amount), colors.yellow, colors.black, 8)
+          writeAt(math.max(1, w - 20), y, fmtRate(row.rate), colors.cyan, colors.black, 10)
           y = y + 1
         end
       end
