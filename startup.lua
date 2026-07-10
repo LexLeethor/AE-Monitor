@@ -5,7 +5,7 @@
 local bridge = peripheral.find("me_bridge")
 if not bridge then error("No me_bridge found. Attach an Advanced Peripherals ME Bridge.") end
 
-local VERSION = "2026-07-10.2"
+local VERSION = "2026-07-10.3"
 local POLL_SECONDS = 3
 local STALL_SECONDS = 90
 local DONE_GRACE_SECONDS = 20
@@ -276,6 +276,7 @@ local function addDetailRows(job, parentRow, rows, seen, source)
 end
 
 local function buildTaskRowsForTask(key, task, source)
+  if task == nil then return {} end
   local job = type(task) == "table" and (task.craftingJob or task.job or task.craftJob) or nil
   if not job and type(task) == "table" then job = task end
 
@@ -289,6 +290,7 @@ local function buildTaskRowsForTask(key, task, source)
 end
 
 local function taskFromObject(key, task, source)
+  if task == nil then return nil end
   local job = type(task) == "table" and (task.craftingJob or task.job or task.craftJob) or nil
   if not job and type(task) == "table" then job = task end
 
