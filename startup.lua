@@ -5,7 +5,7 @@
 local bridge = peripheral.find("me_bridge")
 if not bridge then error("No me_bridge found. Attach an Advanced Peripherals ME Bridge.") end
 
-local VERSION = "2026-07-10.3"
+local VERSION = "2026-07-10.4"
 local POLL_SECONDS = 3
 local STALL_SECONDS = 90
 local DONE_GRACE_SECONDS = 20
@@ -391,10 +391,11 @@ local state = {tasks = {}, selectedId = nil, lastProgressAt = now()}
 
 local function updateState(tasks, sampleTime)
   local active = {}
-  for _, task in ipairs(tasks) do
-    local id = task.id
-    active[id] = true
-    local old = state.tasks[id]
+  for _, task in ipairs(tasks or {}) do
+    if type(task) == "table" then
+      local id = task.id
+      active[id] = true
+      local old = state.tasks[id]
     if not old then
       old = {firstSeen = sampleTime, lastSeen = sampleTime, lastAmount = task.amount, lastProgress = sampleTime, rate = 0}
     else
@@ -414,14 +415,15 @@ local function updateState(tasks, sampleTime)
       old.lastAmount = task.amount
       old.lastSeen = sampleTime
     end
-    old.label = task.label
-    old.amount = task.amount
-    old.total = task.total
-    old.progress = task.progress
-    old.completion = task.completion
-    old.source = task.source
-    old.lastProgressValue = task.progress
-    state.tasks[id] = old
+      old.label = task.label
+      old.amount = task.amount
+      old.total = task.total
+      old.progress = task.progress
+      old.completion = task.completion
+      old.source = task.source
+      old.lastProgressValue = task.progress
+      state.tasks[id] = old
+    end
   end
 
   for id, tracked in pairs(state.tasks) do
@@ -510,7 +512,7 @@ local function draw(selected, rows, moving, cpus, rawTaskCount, sampleTime)
     mon.clear()
     local w, h = mon.getSize()
     local busyCpus = 0
-    for _, cpu in ipairs(cpus) do if cpu.busy then busyCpus = busyCpus + 1 end end
+    for _, cpu in ipairs(cpus or {}) do if type(cpu) == "table" and cpu.busy then busyCpus = busyCpus + 1 end end
 
     clearLine(1, colors.cyan)
     writeAt(2, 1, "AE2 CRAFTING MONITOR", colors.black, colors.cyan, w - 20)
